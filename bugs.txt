@@ -1,0 +1,2 @@
+sometimes deleting an array completly yields a "element does not exist at that path", what is really weird is that acessing the element before yields an existing element
+FIXED: first, you are an idiot, you are deleting multiple elements of an array by index but ignoring that its indexes are changing with every deletion, idiot.
