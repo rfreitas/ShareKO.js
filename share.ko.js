@@ -31,10 +31,6 @@ cuid:true
 		return sub;
 	};
 
-	//callbacks for the next change or after the timeout
-	ko.observable.fn.nextChange = ko.computed.fn.nextChange = function( handler, target ){
-		//TODO
-	};
 
 	ko.observableArray.fn.lastItem = function(){
 		return this()[ this().length - 1 ];
@@ -66,7 +62,7 @@ var setKoObj = function( obj, doc ){
 
 var setKoObjSync = function( obj, doc, propCreator ){
 	var plain = doc.get();
-	
+
 	//ko.mapping.fromJS( plain , obj);//bug
 	//koProperMapping( obj, plain, propCreator );//this has to be done before the sync
 	//so that the properties coming from the doc don't get feedback into the doc again
@@ -81,7 +77,6 @@ var setKoObjSync = function( obj, doc, propCreator ){
 var identityFunction = function(arg){return arg;};
 
 var koProperMapping = ko.propermap = function( koObj, plain, propCreator ){
-	
 	propCreator = propCreator || function(value){return value;};
 
 	Object.keys( koObj ).forEach( function(key){
@@ -164,13 +159,12 @@ out.objectSync = function( objKo, objShare, propertyCreator ){
 			if ( "oi" in operation ){
 				var newValue = operation.oi;
 				setter( key, newValue );
-				
 			}
 		});
 	});
 
 
-	
+
 	objShare.on( "replace", function( key, oldVal, newVal){
 		console.log("replace");
 		console.log(arguments);
