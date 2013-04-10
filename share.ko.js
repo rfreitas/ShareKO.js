@@ -171,13 +171,47 @@
     };
 
     ko.observableArray.fn.insertAt = function(index, value) {
-        this.valueWillMutate();
         this.splice(index, 0, value);
-        this.valueHasMutated();
     };
 
     ko.observableArray.fn.deleteAt = function(index){
         return this.splice( index, 1 );
+    };
+
+
+    //ref: http://stackoverflow.com/questions/5306680/move-an-array-element-from-one-array-position-to-another
+    //ref: http://jsperf.com/array-prototype-move
+    var scarrottArrayMove = function(pos1, pos2) {
+        // local variables
+        var i, tmp;
+        // cast input parameters to integers
+        pos1 = parseInt(pos1, 10);
+        pos2 = parseInt(pos2, 10);
+        // if positions are different and inside array
+        if (pos1 !== pos2 && 0 <= pos1 && pos1 <= this.length && 0 <= pos2 && pos2 <= this.length) {
+            // save element from position 1
+            tmp = this[pos1];
+            // move element down and shift other elements up
+            if (pos1 < pos2) {
+                for (i = pos1; i < pos2; i++) {
+                    this[i] = this[i + 1];
+                }
+            }
+            // move element up and shift other elements down
+            else {
+                for (i = pos1; i > pos2; i--) {
+                    this[i] = this[i - 1];
+                }
+            }
+            // put element from position 1 to destination
+            this[pos2] = tmp;
+        }
+    };
+
+    var funcScarrottArrayMove = unthisify(scarrottArrayMove);
+
+    ko.observableArray.fn.move = function(originalIndex, newIndex){
+        funcScarrottArrayMove();
     };
 
 
@@ -198,44 +232,14 @@
 
     var dummy = {
         dispose: dummyFunc,
-        synchronize: dummyFunc
+        synchronize: dummyFunc,
+        init: function(){}
     };
 
     var dummyDisposable = function(){
         return dummy;
     };
 
-
-    var singleChildProto = {
-        childSyncs: dummy,
-        newValueTransform: identityFunction,
-        dispose: function(){
-            this.childSyncs.dispose();
-        },
-        replaceChildValue: function(newValue){
-            this.value = newValue;
-        },
-        insertChild: function(newValue){
-            newValue = this.newValueTransform(newValue);
-            this.replaceChildValue(newValue);
-            this.replaceChild(newValue);
-        },
-        replaceChild: function(newValue){
-            this.childSyncs.dispose();
-            var childSyncs = this.childSyncs = this.generateChildSync(newValue);
-            if (this.isSynchronized) childSyncs.synchronize();
-        },
-        generateChildSync: function(childValue){
-            return out.propertyDocSync(childValue, this.document, this, this.childKey, this.newValueTransform);
-        },
-        synchronize: function(){
-            this.isSynchronized = true;
-            this.childSyncs.synchronize();
-        },
-        init: function(){
-            this.replaceChild(this.value);
-        }
-    };
 
 
 
@@ -247,10 +251,10 @@
     var typeOf = function(value){
         var type;
         if (isObservableArray(value)){
-            type = "observable";
+            type = "observableArray";
         }
         else if (ko.isObservable(value)){
-            type = "observableArray";
+            type = "observable";
         }
         else if ( typeof value === "function"){
             type = "function";
@@ -269,13 +273,43 @@
 
     var syncProto = {
         isSynchronized: false,
+        childSyncs: dummy,
         newValueTransform: identityFunction,
         insertChild: function(newValue, childKey){
             newValue = this.newValueTransform(newValue, childKey, this.document.path.slice(0), this.value);
             this.replaceChildValue(newValue, childKey);
             this.replaceChild(newValue, childKey);
+        },
+        init: function(value, doc, parentSync, childKey, newValueTransform){
+            this.value = value;
+            this.document = doc;
+            this.parent = parentSync;
+            this.childKey = childKey;
+            if (newValueTransform) this.newValueTransform = newValueTransform;
         }
     };
+
+
+    var singleChildProto = extendProto( syncProto, {
+        dispose: function(){
+            this.childSyncs.dispose();
+        },
+        replaceChildValue: function(newValue){
+            this.value = newValue;
+        },
+        replaceChild: function(newValue){
+            this.childSyncs.dispose();
+            var childSyncs = this.childSyncs = this.generateChildSync(newValue);
+            if (this.isSynchronized) childSyncs.synchronize();
+        },
+        generateChildSync: function(childValue){
+            return out.propertyDocSync(childValue, this.document, this, this.childKey, this.newValueTransform);
+        },
+        synchronize: function(){
+            this.isSynchronized = true;
+            this.childSyncs.synchronize();
+        }
+    });
 
     var valueSyncProto = extendProto(syncProto, {
         isValid: function(val){
@@ -326,7 +360,10 @@
             }
         },
         init: function(){
-
+            Object.getPrototypeOf(valueSyncProto).init.apply(this,arguments);
+            this.shareSubscriptions = extendShareSubscriptionGroup({
+                collection:[]
+            });
         },
         setValueRemote: function(value){
             var parent = this.parent;
@@ -389,34 +426,44 @@
             }
         },
         init: function(){
+            Object.getPrototypeOf(objectSyncProto).init.apply(this,arguments);
+
+            this.shareSubscriptions = extendShareSubscriptionGroup({
+                collection:[]
+            });
+            this.childSyncs = extendProto(objectChildSyncs,{
+                collection: {},
+                sync: this
+            });
+
             this.childSyncs.setSyncs();
-            return this;
+        },
+        remoteOpHandling: function( e, operation ){
+            console.log("remote object operation");
+            console.log(operation);
+            var doc = this.document;
+            var path = operation.p;
+            var key = path[0];
+            if (path.length === 0){
+                this.setValueRemote(doc.get());
+            }
+            else if ( !this.childSyncs.isChildSynced(key)/*you are only taking a look for new children*/){
+                console.log("Inserting child");
+                console.log(operation.p);
+                console.assert(path.length === 1,"path.length !== 1, it's:"+path.length);
+                if ( "oi" in operation ){
+                    var newValue = doc.at(key).get();
+                    this.insertChild(newValue, key);
+                }
+            }
         },
         synchronize: function(){
             var doc = this.document;
             this.isSynchronized = true;
 
+            this.shareSubscriptions.subscribe(doc, "remoteop", this.remoteOpHandling, this);
+
             this.initialSync();
-
-            this.shareSubscriptions.subscribe(doc, "remoteop", function(e,operation){
-                console.log("remote object operation");
-                console.log(operation);
-                var path = operation.p;
-                var key = path[0];
-                if (path.length === 0){
-                    this.setValueRemote(doc.get());
-                }
-                else if ( !this.childSyncs.isChildSynced(key)/*you are only taking a look for new children*/){
-                    console.log("Inserting child");
-                    console.log(operation.p);
-                    console.assert(path.length === 1,"path.length !== 1, it's:"+path.length);
-                    if ( "oi" in operation ){
-                        var newValue = doc.at(key).get();
-                        this.insertChild(newValue, key);
-                    }
-                }
-            }, this);
-
         }
     });
 
@@ -454,6 +501,38 @@
         }
     });
 
+    /**
+     * remote op subcriptions are called in the ordered they were subscribed
+     *  parents subscribe to children first for remote op operations
+     * subdocs' paths of child syncs can be changed dynamically, effectivelly changing the remoteop events those children will receive
+     */
+
+    var arraySyncProto = extendProto( objectSyncProto, {
+        pushChildValue: function(){
+
+        },
+        removeChildValue: function(){
+
+        },
+        initialSync: function(){
+            var doc = this.document;
+            var docValue = doc.get();
+            var childSyncs = this.childSyncs;
+
+            if (typeof docValue === "object" || docValue === undefined || docValue === null){
+                if (!docValue) doc.set([]);
+                childSyncs.syncAll();
+            }
+            else {
+                this.setValueRemote(docValue);
+            }
+        }
+    });
+
+
+
+
+
     var silentKVOProto =
         out.silentKVOProto = {
             _firedBySelf: false,
@@ -482,27 +561,16 @@
             }
         };
 
-    var observableSyncProto = extendProto(syncProto, {
+
+
+    var observableSyncProto = extendProto(singleChildProto, {
         koSubscription: dummy,
         childSyncs: dummy,
         isSynchronized: false,
         subscriptionFunction: function(val){
-            console.log("KO Notifications, key: "+this.childKey);
-            console.log(this.document.path);
+            console.log("KO Notifications, path: "+this.document.path);
             console.log(val);
             this.childSyncs.setValueLocal(val);
-        },
-        generateChildSync: function(childValue){
-            return out.propertyDocSync(childValue, this.document, this, this.childKey, this.newValueTransform);
-        },
-        setChildSync: function(childValue){
-            this.childSyncs.dispose();
-            return this.childSyncs = this.generateChildSync(childValue);
-        },
-        replaceChild: function(childValue){
-            //in case a child can't handle its value, but the value is not new!
-            var sync = this.setChildSync(childValue);
-            if (this.isSynchronized) sync.synchronize();
         },
         replaceChildValue: function(newValue){
             //child has a new value and can handle it
@@ -515,21 +583,51 @@
             this.childSyncs.dispose();
             this.koSubscription.dispose();
         },
-        init: function(){
-            var observable = this.observable;
+        koSubcribing: function(){
+            this.koSubscription = this.observable.subscribe( silentKVOProto.caller(this.subscriptionFunction), this);
+        },
+        init: function(observable){
+            Object.getPrototypeOf(observableSyncProto).init.apply(this,arguments);
+            this.observable = observable;
             if (!ko.isComputed(observable) && !ko.isLocal(observable)){
                 var observableValue = observable();
-                this.setChildSync(observableValue);
-                this.koSubscription = observable.subscribe( silentKVOProto.caller(this.subscriptionFunction), this);
+                this.replaceChild(observableValue);
+                this.koSubcribing();
+            }
+        }
+    });
+
+    var observableArraySyncProto = extendProto(observableSyncProto, {
+        subscriptionFunction: function(val){
+            console.log("KO Notifications, path: "+this.document.path);
+            console.log(val);
+            this.childSyncs.setValueLocal(val);
+        },
+        generateChildSync: function(childValue){
+            return out.arrayObservedDocSync(childValue, this.document, this, this.childKey, this.newValueTransform);
+        },
+        replaceChildValue: function(newValue){
+            //child has a new value and can handle it
+            var observable = this.observable;
+            if ( ko.isObservable(observable) && ko.isWriteableObservable(observable)){
+                silentKVOProto.setter(observable,newValue);
             }
         },
-        synchronize: function(){
-            this.isSynchronized = true;
-            this.childSyncs.synchronize();
+        koSubcribing: function(){
+            subscribeArray(this.observable, silentKVOProto.caller(this.subscriptionFunction), this );
+        },
+        dispose: function(){
+            this.childSyncs.dispose();
+            this.koSubscription.dispose();
         }
     });
 
 
+    var arrayOberservedSyncProto = extendProto(arraySyncProto, {
+        replaceChildValue: function(newValue, index){
+            this.parent.observable.insertAt(index, newValue);
+        }
+    });
 
 
     out.propertyDocSync = function(value){
@@ -537,93 +635,42 @@
         var type = typeOf(value);
         switch(type){
             case "observable":
-                syncFunc = out.observableDocSync;
+                syncFunc = observableSyncProto;
                 break;
             case "observableArray":
-                syncFunc = out.observableArrayDocSync;
+                syncFunc = observableArraySyncProto;
                 break;
             case "function":
-                syncFunc = dummyDisposable;
+                syncFunc = dummy;
                 break;
             case "object":
-                syncFunc = out.objectDocSync;
+                syncFunc = objectSyncProto;
                 break;
             case "value":
-                syncFunc = out.valueDocSync;
+                syncFunc = valueSyncProto;
                 break;
         }
         console.log("new property of type: "+type);
         console.log(arguments);
-        return syncFunc.apply(this, arguments);
+        return generate.apply(syncFunc, arguments);
     };
 
+    var rootSyncProto = extendProto( singleChildProto, {
+        init: function(){
+            Object.getPrototypeOf(rootSyncProto).init.apply(this,arguments);
+            this.replaceChild(this.value);
+        }
+    });
+
+
+    var generate = function( value, doc, parentSync, childKey, newValueTransform ){
+        var sync = Object.create(this);
+        sync.init.apply(sync, arguments);
+        return sync;
+    };
 
     out.sync = function( value, doc, newValueTransform){
-        var sync = extendProto( singleChildProto, {
-            document: doc.at(),
-            value: value
-        });
-        if (newValueTransform) sync.newValueTransform = newValueTransform;
-        sync.init();
-        return sync;
+        return generate.call(rootSyncProto, value, doc.at(), undefined, undefined, newValueTransform);
     };
-
-
-    out.valueDocSync = function(value, doc, parentSync, childKey){
-
-        var sync = extendProto(valueSyncProto, {
-            shareSubscriptions: extendShareSubscriptionGroup({
-                collection:[]
-            }),
-            value: value,
-            document: doc,
-            parent: parentSync,
-            childKey: childKey
-        });
-
-        sync.init();
-
-        return sync;
-    };
-
-    out.objectDocSync = function(value, doc, parentSync, childKey, newValueTransform){
-        //assumes no knowledge of ko and his observables
-        var sync = extendProto( objectSyncProto, {
-            value: value,
-            document: doc,
-            parent: parentSync,
-            childKey: childKey,
-            newValueTransform: newValueTransform,
-            shareSubscriptions: extendShareSubscriptionGroup({
-                collection:[]
-            }),
-            childSyncs: extendProto(objectChildSyncs,{
-                collection: {}
-            })
-        });
-
-        sync.childSyncs.sync = sync;
-
-        sync.init();
-
-        return sync;
-    };
-
-    out.observableDocSync = function(observable, doc, parentSync, childKey, newValueTransform ){
-
-        var sync = extendProto(observableSyncProto, {
-            observable: observable,
-            document: doc,
-            parent: parentSync,
-            childKey: childKey,
-            newValueTransform: newValueTransform
-        });
-
-        sync.init();
-
-        return sync;
-    };
-
-    out.observableArrayDocSync = out.observableDocSync;
 
 })(window, ko, undefined);
