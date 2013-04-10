@@ -208,6 +208,7 @@
 
     var singleChildProto = {
         childSyncs: dummy,
+        newValueTransform: identityFunction,
         dispose: function(){
             this.childSyncs.dispose();
         },
@@ -215,17 +216,20 @@
             this.value = newValue;
         },
         insertChild: function(newValue){
+            newValue = this.newValueTransform(newValue);
             this.replaceChildValue(newValue);
-            this.replaceChild(newValue).synchronize();
+            this.replaceChild(newValue);
         },
         replaceChild: function(newValue){
             this.childSyncs.dispose();
-            return this.childSyncs = this.generateChildSync(newValue);
+            var childSyncs = this.childSyncs = this.generateChildSync(newValue);
+            if (this.isSynchronized) childSyncs.synchronize();
         },
         generateChildSync: function(childValue){
-            return out.propertyDocSync(childValue, this.document, this);
+            return out.propertyDocSync(childValue, this.document, this, this.childKey, this.newValueTransform);
         },
         synchronize: function(){
+            this.isSynchronized = true;
             this.childSyncs.synchronize();
         },
         init: function(){
@@ -264,7 +268,13 @@
 
 
     var syncProto = {
-        isSynchronized: false
+        isSynchronized: false,
+        newValueTransform: identityFunction,
+        insertChild: function(newValue, childKey){
+            newValue = this.newValueTransform(newValue, childKey, this.document.path.slice(0), this.value);
+            this.replaceChildValue(newValue, childKey);
+            this.replaceChild(newValue, childKey);
+        }
     };
 
     var valueSyncProto = extendProto(syncProto, {
@@ -334,35 +344,12 @@
         }
     });
 
-    var a;
-    var f = function (e,t,n){
-        var r= a(this.snapshot,e),
-            i=r.elem,
-            s=r.key,
-            o= {p:e};
-        if(i.constructor===Array){
-            o.li=t;
-            if (typeof i[s]!=="undefined") o.ld=i[s];
-        }
-        else{
-            if(typeof i!=="object")
-                throw new Error("bad path");
-            o.oi=t;
-            if (typeof i[s]!=="undefined") o.od=i[s];
-        }
-        return this.submitOp([o],n);
-    };
-
     var objectSyncProto = extendProto(syncProto, {
         isValid: function(value){
             return this.value === value;
         },
         replaceChildValue: function(newValue, childKey){
             this.value[childKey] = newValue;
-        },
-        insertChild: function(newValue, childKey){
-            this.replaceChildValue(newValue, childKey);
-            this.replaceChild(newValue, childKey);
         },
         replaceChild: function(newValue, childKey){
             var sync = this.childSyncs.syncChildWithValue(newValue, childKey);
@@ -371,15 +358,13 @@
             }
         },
         generateChildSync: function(childValue, childKey){
-            return out.propertyDocSync(childValue, this.document.at(childKey), this, childKey);
+            return out.propertyDocSync(childValue, this.document.at(childKey), this, childKey, this.newValueTransform);
         },
         setValueLocal: function(value){
             var parent = this.parent;
             var childKey = this.childKey;
-            if ( value !== this.value ){
-                if (this.isSynchronized) this.document.set();
-                parent.replaceChild(value, childKey);
-            }
+            if (this.isSynchronized) this.document.set();
+            parent.replaceChild(value, childKey);
         },
         setValueRemote: function(value){
             var parent = this.parent;
@@ -414,6 +399,8 @@
             this.initialSync();
 
             this.shareSubscriptions.subscribe(doc, "remoteop", function(e,operation){
+                console.log("remote object operation");
+                console.log(operation);
                 var path = operation.p;
                 var key = path[0];
                 if (path.length === 0){
@@ -471,8 +458,13 @@
         out.silentKVOProto = {
             _firedBySelf: false,
             setter: function(koProperty, newValue){
+                this.silentCall(function(){
+                    koProperty( newValue );
+                });
+            },
+            silentCall: function(setterFunc){
                 this._firedBySelf = true;
-                koProperty( newValue );
+                setterFunc();
                 this._firedBySelf = false;
             },
             caller: function(callback){
@@ -495,22 +487,17 @@
         childSyncs: dummy,
         isSynchronized: false,
         subscriptionFunction: function(val){
-            if(val !== this.childSyncs.value ){
-                console.log("ko notified with new value");
-                this.childSyncs.setValueLocal(val);
-            }
+            console.log("KO Notifications, key: "+this.childKey);
+            console.log(this.document.path);
+            console.log(val);
+            this.childSyncs.setValueLocal(val);
         },
         generateChildSync: function(childValue){
-            return out.propertyDocSync(childValue, this.document, this, this.childKey);
+            return out.propertyDocSync(childValue, this.document, this, this.childKey, this.newValueTransform);
         },
         setChildSync: function(childValue){
             this.childSyncs.dispose();
             return this.childSyncs = this.generateChildSync(childValue);
-        },
-        insertChild: function(newValue){
-            //a child has a new value and can't handle it
-            this.replaceChildValue(newValue);
-            this.replaceChild(newValue);
         },
         replaceChild: function(childValue){
             //in case a child can't handle its value, but the value is not new!
@@ -547,7 +534,8 @@
 
     out.propertyDocSync = function(value){
         var syncFunc;
-        switch(typeOf(value)){
+        var type = typeOf(value);
+        switch(type){
             case "observable":
                 syncFunc = out.observableDocSync;
                 break;
@@ -564,15 +552,18 @@
                 syncFunc = out.valueDocSync;
                 break;
         }
+        console.log("new property of type: "+type);
+        console.log(arguments);
         return syncFunc.apply(this, arguments);
     };
 
 
-    out.sync = function( value, doc){
+    out.sync = function( value, doc, newValueTransform){
         var sync = extendProto( singleChildProto, {
             document: doc.at(),
             value: value
         });
+        if (newValueTransform) sync.newValueTransform = newValueTransform;
         sync.init();
         return sync;
     };
@@ -595,13 +586,14 @@
         return sync;
     };
 
-    out.objectDocSync = function(value, doc, parentSync, childKey){
+    out.objectDocSync = function(value, doc, parentSync, childKey, newValueTransform){
         //assumes no knowledge of ko and his observables
         var sync = extendProto( objectSyncProto, {
             value: value,
             document: doc,
             parent: parentSync,
             childKey: childKey,
+            newValueTransform: newValueTransform,
             shareSubscriptions: extendShareSubscriptionGroup({
                 collection:[]
             }),
@@ -617,13 +609,14 @@
         return sync;
     };
 
-    out.observableDocSync = function(observable, doc, parentSync, childKey ){
+    out.observableDocSync = function(observable, doc, parentSync, childKey, newValueTransform ){
 
         var sync = extendProto(observableSyncProto, {
             observable: observable,
             document: doc,
             parent: parentSync,
-            childKey: childKey
+            childKey: childKey,
+            newValueTransform: newValueTransform
         });
 
         sync.init();
