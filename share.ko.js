@@ -25,9 +25,8 @@
         return sub;
     };
 
-
-    ko.observableArray.fn.lastItem = function(){
-        return this()[ this().length - 1 ];
+    var arrayLastItem = function(array){
+        return array[ array.length - 1 ];
     };
 
     ko.isLocal = function( prop ){
@@ -224,9 +223,7 @@
 
 
 
-    var isObservableArray = function(property){
-        return ko.observableArray.fn.isPrototypeOf(property);
-    };
+
 
     var dummyFunc = function(){};
 
@@ -241,12 +238,15 @@
     };
 
 
-
+    ko.observableArray.fn.isObservableArray = true;
 
     var isValue = function(value){
         return typeOf(value) === "value";
     };
 
+    var isObservableArray = function(property){
+        return property && !!property.isObservableArray;
+    };
 
     var typeOf = function(value){
         var type;
@@ -508,25 +508,6 @@
      */
 
     var arraySyncProto = extendProto( objectSyncProto, {
-        pushChildValue: function(){
-
-        },
-        removeChildValue: function(){
-
-        },
-        initialSync: function(){
-            var doc = this.document;
-            var docValue = doc.get();
-            var childSyncs = this.childSyncs;
-
-            if (typeof docValue === "object" || docValue === undefined || docValue === null){
-                if (!docValue) doc.set([]);
-                childSyncs.syncAll();
-            }
-            else {
-                this.setValueRemote(docValue);
-            }
-        }
     });
 
 
@@ -597,21 +578,24 @@
         }
     });
 
+
+    var arrayOberservedSyncProto = extendProto(arraySyncProto, {
+        replaceChildValue: function(newValue, index){
+            this.parent.observable.setAt(index, newValue);
+        }
+    });
+
     var observableArraySyncProto = extendProto(observableSyncProto, {
-        subscriptionFunction: function(val){
-            console.log("KO Notifications, path: "+this.document.path);
-            console.log(val);
-            this.childSyncs.setValueLocal(val);
+        subscriptionFunction: function(val, pre){
+            console.log("Array KO Notifications, path: "+this.document.path);
+            console.log(arguments);
+            if (!_.isEqual( val, pre)){
+                this.childSyncs.replaceChild( arrayLastItem( val), val.length-1 );
+            }
+            //this.childSyncs.setValueLocal(val);
         },
         generateChildSync: function(childValue){
-            return out.arrayObservedDocSync(childValue, this.document, this, this.childKey, this.newValueTransform);
-        },
-        replaceChildValue: function(newValue){
-            //child has a new value and can handle it
-            var observable = this.observable;
-            if ( ko.isObservable(observable) && ko.isWriteableObservable(observable)){
-                silentKVOProto.setter(observable,newValue);
-            }
+            return generate.call( arrayOberservedSyncProto, childValue, this.document, this, this.childKey, this.newValueTransform);
         },
         koSubcribing: function(){
             subscribeArray(this.observable, silentKVOProto.caller(this.subscriptionFunction), this );
@@ -623,11 +607,7 @@
     });
 
 
-    var arrayOberservedSyncProto = extendProto(arraySyncProto, {
-        replaceChildValue: function(newValue, index){
-            this.parent.observable.insertAt(index, newValue);
-        }
-    });
+
 
 
     out.propertyDocSync = function(value){
