@@ -1,58 +1,43 @@
 //JSHint globals
 /*global
-window:true,
-ko:true
-*/
+ window:true,
+ ko:true,
+ _:true,
+ console: true
+ */
 
-(function(window, ko){
+(function(window, ko, undefined){
 
-    ko.binded = function( property, nestedProperty, target){
-
-        var setterGetter = function(value){
-            var propertyValue = typeof property === "function" ? property() : this[property]();
-
-            if (propertyValue){
-                return propertyValue[nestedProperty](value);
-            }
-        };
-
-        return ko.computed({
-            read: setterGetter,
-            write: setterGetter,
-            owner: target
-        })
+    //if the property is local the object sharejsdocument syncer ignores
+    ko.observable.fn.local = ko.computed.fn.local = function(){
+        this.isLocal = true;
+        return this;
     };
 
-	//if the property is local the object sharejsdocument syncer ignores
-	ko.observable.fn.local = ko.computed.fn.local = function(){
-		this.isLocal = true;
-		return this;
-	};
 
-
-	ko.observable.fn.subscribeOnce = ko.computed.fn.subscribeOnce = function( callback, callbackTarget, event ){
-		var sub = this.subscribe( function(){
+    ko.observable.fn.subscribeOnce = ko.computed.fn.subscribeOnce = function( callback, callbackTarget, event ){
+        var sub = this.subscribe( function(){
             var returnValue = callback.apply(this, arguments);
             sub.dispose();
             return returnValue;
         }, callbackTarget, event );
 
         return sub;
-	};
+    };
 
 
-	ko.observableArray.fn.lastItem = function(){
-		return this()[ this().length - 1 ];
-	};
+    ko.observableArray.fn.lastItem = function(){
+        return this()[ this().length - 1 ];
+    };
 
-	ko.isLocal = function( prop ){
-		return this.isObservable(prop) && prop.isLocal;
-	};
+    ko.isLocal = function( prop ){
+        return this.isObservable(prop) && prop.isLocal;
+    };
 
 
 
-	var out =
-	window.sko = {};
+    var out =
+        window.sko = {};
 
     var identityFunction = function(arg){return arg;};
 
@@ -82,536 +67,570 @@ ko:true
     };
 
 
+    var extendProto =
+    out.extendProto = function(prototype, properties){
+        var out = Object.create(prototype);
+        return _.extend(out, properties);
+    };
 
-	var koProperMapping = ko.propermap = function( koObj, plain, propCreator ){
-		//ko.mapping.fromJS( doc.get() , obj); buggy
-
-		propCreator = propCreator || identityFunction;
-
-		Object.keys( plain ).forEach( function(key){
-			var prop = koObj[key];
-			var propFromPlain =  propCreator( plain[key], key );
-
-			if ( ko.isWriteableObservable( prop ) ){
-				prop( propFromPlain );
-			}
-			else if( !ko.isComputed( prop ) ){
-				//koObj[key] = propFromPlain;
-			}
-		});
-	};
-
-
-    var subscriptionsGroup = {
+    var subscriptionsGroup =
+    out.subscriptionsGroupProto = {
         collection: null,
         dispose: function(){
-            Object.keys(this.collection).forEach(function(sub){
+            _.forEach(this.collection, function(sub){
                 sub.dispose();
-            });
-            this.collection = null;
+            }, this);
         },
         disposeOf: function(subscriptionKey){
-            var sub = this[subscriptionKey];
+            var sub = this.collection[subscriptionKey];
             if (sub) sub.dispose();
-            this[subscriptionKey] = undefined;
+            delete this.collection[subscriptionKey];
         }
     };
 
-    var extendSubscriptionGroup = function(properties){
-        var extendedObject = Object.create(subscriptionsGroup);
-        return _.extend(extendedObject, properties);
+    var extendSubscriptionGroup = _.partial(extendProto, subscriptionsGroup);
+
+    var childRelativePath = function(childPath, parentPath){
+        if (childPath.length < parentPath.length || childPath.length - 1 > parentPath.length){
+            return false;
+        }
+        var i;
+        for (i=0; i<parentPath.length; i++){
+            if (parentPath[i] !== childPath[i]) return false;
+        }
+        return childPath.slice(i);
     };
 
-    subscriptionsGroup = {
-        collection:[],
-        subscribe: function(){
-            this.collection.push( this.extendSubscription(objShare.on.apply(objShare,arguments)) );
-        },
-        extendSubscription: function(subscription){
-            var extension = Object.create(subscription);
-            extension.dispose = function(){
-                subscription.cb = function(){};//TODO: hack! this won't stop sharejs from calling it, albeit it will be calling an empty function
+    //why so much complexity? listeners for subdocs suck, they are buggy as hell
+    var callSubOperationsOnly = function(subdoc, event, callback, operations){
+        operations.forEach(function(operation){
+            var operationPath = operation.p;
+            var subDocPath = subdoc.path;
+            var operationSubPath = childRelativePath(operationPath, subDocPath);
+            if (operationSubPath !== false){
+                var subOperation = extendProto(operation, {p: operationSubPath});
+                callback.call(this, subOperation, subdoc );
             }
-            return extension;
-        }
+        });
     };
 
-    var extendShareSubscriptionGroup = function(properties){
-        var extendedObject = Object.create(subscriptionsGroup);
-        return _.extend(extendedObject, properties);
-    }
-
-
-    var silentKVOProto =
-    out.silentKVOProto = {
-        _firedBySelf: false,
-        setter: function(koProperty, newValue){
-            this._firedBySelf = true;
-            koProperty( newValue );
-            this._firedBySelf = false;
-        },
-        caller: function(callback){
-            var silentKVO = this;
-            return function(){
-                if (!silentKVO._firedBySelf) return callback.apply(this, arguments);
-            }
-        },
-        //a subscription model that won't call the callback if the property was set with the silent(this) set
-        subscribe: function(koProperty, callback, callbackTarget){
-            return koProperty.subscribe( this.caller(callback), callbackTarget);
-        },
-        subscribeWithHistory: function(koProperty, callback, callbackTarget){
-            return subscribeWithHistory(koProperty, this.caller(callback), callbackTarget)
-        }
+    var unthisify = function(func){
+        return function(target){
+            return func.apply( target, _.toArray(arguments).slice(1) );
+        };
     };
 
+    //ref: http://stackoverflow.com/a/9815010/689223
+    // Array Remove - By John Resig (MIT Licensed)
+    var deleteIndexFromArrayProto = function(from, to) {
+        var rest = this.slice((to || from) + 1 || this.length);
+        this.length = from < 0 ? this.length + from : from;
+        return this.push.apply(this, rest);
+    };
 
+    var deleteIndexFromArray = unthisify(deleteIndexFromArrayProto);
 
+    var deleteFromArray = function(array, el){
+        var index = array.indexOf(el);
+        if (index !== -1) deleteIndexFromArray(array, index);
+    };
 
-	var objectSync =
-	out.objectSync = function( objKo, objShare, propertyCreator, initialSync ){
-
-		propertyCreator = propertyCreator || identityFunction;
-
-		//how to set the first sync?
-		//assume the server is authoritive, but if the server does not have the values
-		//then the local should be sent
-        initialSync = initialSync || koProperMapping;
-        koProperMapping.apply(this, arguments);
-
-        var silentKVO = Object.create(silentKVOProto);
-
-        var synchronizationState = {
-            childrenSyncs: extendSubscriptionGroup({
-                collection:{},
-                synchronize: function(propertyKey){
-                    var propertyValue = objKo[propertyKey]();
-                    if ( typeof propertyValue === "object" && propertyValue !== null ){
-                        this.disposeOf(propertyKey);
-                        this.collection[propertyKey] = objectSync( propertyValue, objShare.at(propertyKey) );
-                    }
-                }
-            }),
-            koSubscriptions: extendSubscriptionGroup({
-                collection:{},
-                subscribe: function(propertyKey){
-                    var property = objKo[propertyKey];
-                    if ( ko.isObservable( property ) ){
-                        this.disposeOf(propertyKey);
-                        this.collection[propertyKey] = silentKVO.subscribeWithHistory(
-                            property,
-                            this.propertySubscriptionHandler.bind(this, propertyKey)
-                        );
-                    }
-                },
-                subscribeToAll: function(){
-                    Object.keys(objKo).forEach( function(propertyKey){
-                        this.subscribe(propertyKey);
-
-                        //deepness
-                        //this.synchronize(propertyKey);
-                    }.bind(this));
-                },
-                propertySubscriptionHandler: function(propertyKey, newValue, previousValue){
-                    var property = objKo[propertyKey];
-                    var childrenSyncs = synchronizationState.childrenSyncs;
-                    if ( !ko.isLocal( property ) ){
-                        childrenSyncs.disposeOf(propertyKey);
-                        if ( typeof newValue === "object" ){
-                            childrenSyncs.synchronize(propertyKey);
-                            newValue = ko.toJS( newValue );
-                        }
-                        objShare.at(propertyKey).set( newValue );
-                    }
-                }
-            }),
-            shareSubscriptions: extendSubscriptionGroup({
-                collection:[],
-                subscribe: function(){
-                    this.collection.push( this.extendSubscription(objShare.on.apply(objShare,arguments)) );
-                },
-                extendSubscription: function(subscription){
-                    var extension = Object.create(subscription);
-                    extension.dispose = function(){
-                        subscription.cb = function(){};//TODO: hack! this won't stop sharejs from calling it, albeit it will be calling an empty function
-                    }
-                    return extension;
-                }
-            }),
+    var subscribeToSelfAndChildren =
+    out.subscribeToSelfAndChildren = function(subdoc, event, callback, callbackTarget){
+        var wrapper = callSubOperationsOnly.bind(callbackTarget, subdoc, event, callback);
+        var doc = subdoc.doc;
+        doc.on(event, wrapper);
+        return {
             dispose: function(){
-                this.childrenSyncs.dispose();
-                this.koSubscriptions.dispose();
-                this.shareSubscriptions.dispose();
+                var events = doc._events[event];
+                deleteFromArray(events, wrapper);
             }
         };
+    };
 
 
+    var shareSubscriptionsGroupProto = extendProto(subscriptionsGroup,{
+        collection:[],
+        subscribe: function(subdoc, event, callback, callbackTarget){
+            callback = callback.bind(callbackTarget, event);
+            return this.collection.push( subscribeToSelfAndChildren.apply(this, arguments) );
+        }
+    });
 
-        /*
-        * Knockout.js
-        * */
-
-        synchronizationState.koSubscriptions.subscribeToAll();
-
-
-        /*
-        * Share.js
-        * */
-        var shareSubscriptions = synchronizationState.shareSubscriptions;
-
-        //a change in document is set to the koObject with this setter
-        var shareJsSetter = function( key, property ){
-            var newProperty = propertyCreator( property, key);
-            var prop = objKo[key];
-            if ( ko.isWriteableObservable( prop ) && !ko.isLocal( prop ) ){
-                silentKVO.set(prop, newProperty);
-            }
-            else if ( !ko.isComputed( prop ) && !ko.isLocal( prop ) ){
-                objKo[key] = newProperty;
-            }
-        };
-
-        //this is crazy, sometimes the remoteop is called, other times it's the replace
-        //luckily it has been mutually exclusive
-
-        shareSubscriptions.subscribe("remoteop", function(operations){
-			console.log("remoteop");
-			console.log(arguments);
-			operations.forEach(function(operation){
-				var path = operation.p;
-				if ( path.length !== 1 ){
-					console.log("path not supported");
-					return;
-				}
-				var key = path[0];
-
-				if ( "oi" in operation ){
-					var newValue = operation.oi;
-                    shareJsSetter( key, newValue );
-				}
-			});
-		});
-
-
-
-        shareSubscriptions.subscribe("replace", function( key, oldVal, newVal){
-			console.log("replace");
-			console.log(arguments);
-            shareJsSetter( key, newVal );
-		});
-
-
-        return synchronizationState;
-	};
+    var extendShareSubscriptionGroup = _.partial(extendProto, shareSubscriptionsGroupProto);
 
 
 
 
+    //the object that keeps the shareJS document and the ko object of the playlist in sync
+    //ref: http://stackoverflow.com/a/12257443/689223
+    ko.observableArray.fn.setAt = function(index, value) {
+        this.valueWillMutate();
+        this()[index] = value;
+        this.valueHasMutated();
+    };
 
-	//the object that keeps the shareJS document and the ko object of the playlist in sync
-	//ref: http://stackoverflow.com/a/12257443/689223
-	ko.observableArray.fn.setAt = function(index, value) {
-	    this.valueWillMutate();
-	    this()[index] = value;
-	    this.valueHasMutated();
-	};
+    ko.observableArray.fn.insertAt = function(index, value) {
+        this.valueWillMutate();
+        this.splice(index, 0, value);
+        this.valueHasMutated();
+    };
 
-	ko.observableArray.fn.insertAt = function(index, value) {
-	    this.valueWillMutate();
-	    this.splice(index, 0, value);
-	    this.valueHasMutated();
-	};
-
-	ko.observableArray.fn.deleteAt = function(index){
-		return this.splice( index, 1 );
-	};
+    ko.observableArray.fn.deleteAt = function(index){
+        return this.splice( index, 1 );
+    };
 
 
     var subscribeArray =
     out.subscribeWithHistoryToArray = function( observable, callback, callbackTarget ){
         return subscribeWithHistory(observable, callback, callbackTarget, function(arrayBeforeChange){
-            return arrayBeforeChange.slice(0)
-        });
-	};
-
-
-    //helpfull for duck friendliness and to avoid chained calls
-
-
-	var arrayKOInitialSync = function(arrayKO, arrayShare, itemCreator){
-		arrayShare.get().forEach(function(value, index){
-            value = itemCreator(value);
-			arrayKO.setAt(index, value);
-		});
-	};
-
-	var arraySync =
-	out.arraySync = function(arrayKO, arrayShare, itemCreator, docChange, strategy){
-
-		console.log("arraySync");
-		console.log(arguments);
-		strategy = strategy || arrayKOInitialSync;
-		strategy(arrayKO, arrayShare, itemCreator);
-
-		itemCreator = itemCreator || identityFunction;
-		docChange = docChange || identityFunction;
-
-		//initialization, assumes an empty array from the client
-		arrayKO.removeAll();//empty array
-		arrayShare.get().forEach( function(value, index){
-			//TODO respect the  cuid!
-			arrayKO.push( itemCreator( value, index, arrayShare.at(index) ) );
-		});
-
-		var arrayChanged = function(newArray, oldArray){
-			if (kvoFiredByThisFunction) return;
-			console.log("evertyhing changes");
-			console.log(arguments);
-
-			//à brugesso
-			//needs separations between: replace, move, insert, delete
-
-			var indexesToInsertOrReplace = [];//keys that differ
-			newArray.forEach( function(value, index){
-				if (value !== oldArray[index] ){
-					indexesToInsertOrReplace.push( index );
-				}
-			});
-
-			//the algorith:
-			//trim()
-			//replaceOrInsert()
-
-			//delete from the end
-			//basically, how much do you have to trim the shared array, is the problem.
-			var toTrim =  arrayShare.get().length > newArray.length ;
-
-			if (toTrim){
-				//this is done synchronously, because aparently the shared array doesn't get updated asynchronisously,
-				//unlike my original assumption. What happens if the operation is not successful
-				//is an async operation on the shared array, correcting the disallowed operations.
-				while (  arrayShare.get().length > newArray.length ){
-					var lastIndex = arrayShare.get().length - 1;
-					arrayShare.at(lastIndex).remove();
-				}
-			}
-
-			console.log("inserting on shared array");
-			console.log(indexesToInsertOrReplace);
-			indexesToInsertOrReplace.forEach( function(index){
-				var plain = ko.toJS( newArray[index] );
-				arrayShare.at(index).set( plain );
-				//arrayShare.submitOp( {p:[i], od:oldArray[i], oi:newArray[i]} );
-			});
-		};
-
-
-		var setter = function( index, newValue ){
-			var doc = arrayShare.at(index);
-			//regarding the doc, what happens when the item is moved within the array?
-			arrayKO.insertAt(index, itemCreator( newValue, index, doc) );
-		};
-
-		var argumentsToArray = function(args){
-			var out = [];
-			var i;
-			for ( i = 0; i < args.length; i++ ){
-				out.push( args[i]);
-			}
-			return out;
-		};
-
-		var kvoFiredByThisFunction = false;
-		var silentCall = function( setterFunction, arg1, arg2, argN){
-			kvoFiredByThisFunction = true;
-			var out = setterFunction.apply( this, argumentsToArray( arguments ).slice(1) );
-			kvoFiredByThisFunction = false;
-		};
-
-		var deleteAt = function(index){
-			return arrayKO.deleteAt( index );
-		};
-
-		var sub = subscribeArray( arrayKO, arrayChanged );
-
-		/*
-		these events used to work, and they certainly have a much cleaner api for the callback
-		arrayShare.on ( "insert", function(index, plain){
-			console.log("insertion on shared array");
-			console.log(arguments);
-			setter( index, plain );
-		});
-
-		arrayShare.on ( "delete", function(index){
-			console.log("deletion on shared array");
-			console.log(arguments);
-			arrayKO.slice( index, 1 );
-		});
-		*/
-
-		arrayShare.on( "remoteop", function(operations){
-			operations.forEach(function(operation){
-				var path = operation.p;
-				if ( path.length !== 1){
-					console.log("array sync is not deep");
-					return;
-				}
-				console.log("remoteop on shared array");
-				console.log(arguments);
-				var key = path[0];
-
-				if ( operation.hasOwnProperty("li") ){
-					var newValue = operation.li;
-					silentCall ( setter, key, newValue );
-				}
-				else if ( operation.hasOwnProperty("ld") ){//the reason for the else if is that insertion and deletion of the same index
-					//is not always mutually exclusive, due to a flaw in the api design, therefore you don't want to delete
-					//the same item just inserted
-					silentCall ( deleteAt, key );
-				}
-			});
-		});
-	};
-
-    var isPropertySynchronizable = function(property){
-        return ko.isWriteableObservable(property) && !ko.isLocal(property);
-    };
-
-    var objectSynchronizableKeys = function(obj){
-        return Object.keys(obj).filter(function(prop){
-            return isPropertySynchronizable(prop);
+            return arrayBeforeChange.slice(0);
         });
     };
 
-    var forEachSynchronizableProperty = function(obj, callback, callbackTarget){
-        var filteredKeys = objectSynchronizableKeys(obj);
-        callback = callback.bind(callbackTarget);
-        filteredKeys.forEach(function(propKey){
-            callback( obj[propKey], propKey);
-        });
-        return filteredKeys;
-    };
+
 
     var isObservableArray = function(property){
         return ko.observableArray.fn.isPrototypeOf(property);
     };
 
+    var dummyFunc = function(){};
 
-    out.propertyDocSync = function(property, doc){
-        var propSync;
-        if (isObservableArray(property)){
-            propSync = out.observableArrayDocSync(property);
-        }
-        else if (ko.isObservable(property)){
-            propSync = out.observableDocSync(property);
-        }
-        else if (typeof property === "object"){
-            propSync = out.objectDocSync = function(property, doc);
-        }
-        else{
-
-        }
-        return propSync;
+    var dummy = {
+        dispose: dummyFunc,
+        synchronize: dummyFunc
     };
 
-    var removeDoc = function(doc){
-        if (doc.remove){
-            doc.remove();
-        }
-        else{
-            doc.set(undefined);
+    var dummyDisposable = function(){
+        return dummy;
+    };
+
+
+    var singleChildProto = {
+        childSyncs: dummy,
+        dispose: function(){
+            this.childSyncs.dispose();
+        },
+        replaceChildValue: function(newValue){
+            this.value = newValue;
+        },
+        insertChild: function(newValue){
+            this.replaceChildValue(newValue);
+            this.replaceChild(newValue).synchronize();
+        },
+        replaceChild: function(newValue){
+            this.childSyncs.dispose();
+            return this.childSyncs = this.generateChildSync(newValue);
+        },
+        generateChildSync: function(childValue){
+            return out.propertyDocSync(childValue, this.document, this);
+        },
+        synchronize: function(){
+            this.childSyncs.synchronize();
+        },
+        init: function(){
+            this.replaceChild(this.value);
         }
     };
+
+
+
+    var isValue = function(value){
+        return typeOf(value) === "value";
+    };
+
+
+    var typeOf = function(value){
+        var type;
+        if (isObservableArray(value)){
+            type = "observable";
+        }
+        else if (ko.isObservable(value)){
+            type = "observableArray";
+        }
+        else if ( typeof value === "function"){
+            type = "function";
+        }
+        else if (typeof value === "object" && value !== null){
+            type = "object";
+        }
+        else{
+            type = "value";
+        }
+        return type;
+    };
+
+
+
+
+    var syncProto = {
+        isSynchronized: false
+    };
+
+    var valueSyncProto = extendProto(syncProto, {
+        isValid: function(val){
+            return isValue(val);
+        },
+        docChangeHandler: function(){
+            console.log("value sync, share event");
+            var doc = this.document;
+            console.log(doc.get());
+            this.setValueRemote(doc.get());
+        },
+        initialSync: function(){
+            var doc = this.document;
+            var docValue = doc.get();
+            if (docValue !== undefined ){
+                this.setValueRemote(docValue);
+            }
+            else{
+                this.setValueLocal(this.value);
+            }
+        },
+        synchronize: function(){
+            this.isSynchronized = true;
+            this.initialSync();
+            this.subscribeToDocument();
+        },
+        subscribeToDocument: function(){
+            var doc = this.document;
+            var subs = this.shareSubscriptions;
+            subs.dispose();
+
+            var docChangeHandler = this.docChangeHandler.bind(this);
+            var subscribe = subs.subscribe.bind(subs, doc);
+            subscribe('remoteop', docChangeHandler, this);
+        },
+        setValueLocal: function(value){
+            var parent = this.parent;
+            var doc = this.document;
+
+            if (!this.isValid(value)){
+                this.dispose();
+                if (this.isSynchronized) doc.set(undefined);
+                parent.replaceChild( value, this.childKey);
+            }
+            else{
+                if (this.isSynchronized && value !== doc.get() ){ doc.set(value); }
+                this.value = value;
+            }
+        },
+        init: function(){
+
+        },
+        setValueRemote: function(value){
+            var parent = this.parent;
+            var childKey = this.childKey;
+            if (this.isValid(value)){
+                this.value = value;
+                parent.replaceChildValue( value, childKey );
+            }
+            else{
+                parent.insertChild( value, childKey );
+            }
+        },
+        dispose: function(){
+            this.shareSubscriptions.dispose();
+        }
+    });
+
+    var a;
+    var f = function (e,t,n){
+        var r= a(this.snapshot,e),
+            i=r.elem,
+            s=r.key,
+            o= {p:e};
+        if(i.constructor===Array){
+            o.li=t;
+            if (typeof i[s]!=="undefined") o.ld=i[s];
+        }
+        else{
+            if(typeof i!=="object")
+                throw new Error("bad path");
+            o.oi=t;
+            if (typeof i[s]!=="undefined") o.od=i[s];
+        }
+        return this.submitOp([o],n);
+    };
+
+    var objectSyncProto = extendProto(syncProto, {
+        isValid: function(value){
+            return this.value === value;
+        },
+        replaceChildValue: function(newValue, childKey){
+            this.value[childKey] = newValue;
+        },
+        insertChild: function(newValue, childKey){
+            this.replaceChildValue(newValue, childKey);
+            this.replaceChild(newValue, childKey);
+        },
+        replaceChild: function(newValue, childKey){
+            var sync = this.childSyncs.syncChildWithValue(newValue, childKey);
+            if (this.isSynchronized){
+                sync.synchronize();
+            }
+        },
+        generateChildSync: function(childValue, childKey){
+            return out.propertyDocSync(childValue, this.document.at(childKey), this, childKey);
+        },
+        setValueLocal: function(value){
+            var parent = this.parent;
+            var childKey = this.childKey;
+            if ( value !== this.value ){
+                if (this.isSynchronized) this.document.set();
+                parent.replaceChild(value, childKey);
+            }
+        },
+        setValueRemote: function(value){
+            var parent = this.parent;
+            var childKey = this.childKey;
+            parent.insertChild( value, childKey );
+        },
+        dispose: function(){
+            this.childSyncs.dispose();
+            this.shareSubscriptions.dispose();
+        },
+        initialSync: function(){
+            var doc = this.document;
+            var docValue = doc.get();
+            var childSyncs = this.childSyncs;
+
+            if (typeof docValue === "object" || docValue === undefined || docValue === null){
+                if (!docValue) doc.set({});
+                childSyncs.syncAll();
+            }
+            else {
+                this.setValueRemote(docValue);
+            }
+        },
+        init: function(){
+            this.childSyncs.setSyncs();
+            return this;
+        },
+        synchronize: function(){
+            var doc = this.document;
+            this.isSynchronized = true;
+
+            this.initialSync();
+
+            this.shareSubscriptions.subscribe(doc, "remoteop", function(e,operation){
+                var path = operation.p;
+                var key = path[0];
+                if (path.length === 0){
+                    this.setValueRemote(doc.get());
+                }
+                else if ( !this.childSyncs.isChildSynced(key)/*you are only taking a look for new children*/){
+                    console.log("Inserting child");
+                    console.log(operation.p);
+                    console.assert(path.length === 1,"path.length !== 1, it's:"+path.length);
+                    if ( "oi" in operation ){
+                        var newValue = doc.at(key).get();
+                        this.insertChild(newValue, key);
+                    }
+                }
+            }, this);
+
+        }
+    });
+
+    var objectChildSyncs = extendSubscriptionGroup({
+        setSyncs: function(){
+            var object = this.sync.value;
+            this.setSyncsOfKeys(Object.keys(object));
+        },
+        setSyncsOfKeys: function(keys){
+            var object = this.sync.value;
+            keys.forEach(function(propKey){
+                this.syncChildWithValue(object[propKey], propKey);
+            }, this);
+        },
+        syncAll: function(){
+            //sync missing props
+            var sync = this.sync;
+            var object = sync.value;
+            var docObj = sync.document.get();
+            var missingKeys = _.difference( _.union( Object.keys(object), Object.keys(docObj)), Object.keys(this.collection) );
+            this.setSyncsOfKeys(missingKeys);
+            _.each(this.collection, function(childSync){
+                childSync.synchronize();
+            }, this);
+        },
+        synchronize: function(){
+            this.syncAll();
+        },
+        syncChildWithValue: function(newProperty, propKey){
+            this.disposeOf(propKey);
+            return this.collection[propKey] = this.sync.generateChildSync(newProperty, propKey);
+        },
+        isChildSynced: function(childKey){
+            return !!this.collection[childKey];
+        }
+    });
+
+    var silentKVOProto =
+        out.silentKVOProto = {
+            _firedBySelf: false,
+            setter: function(koProperty, newValue){
+                this._firedBySelf = true;
+                koProperty( newValue );
+                this._firedBySelf = false;
+            },
+            caller: function(callback){
+                var silentKVO = this;
+                return function(){
+                    if (!silentKVO._firedBySelf) callback.apply(this, arguments);
+                };
+            },
+            //a subscription model that won't call the callback if the property was set with the silent(this) set
+            subscribe: function(koProperty, callback, callbackTarget){
+                return koProperty.subscribe( this.caller(callback), callbackTarget);
+            },
+            subscribeWithHistory: function(koProperty, callback, callbackTarget){
+                return subscribeWithHistory(koProperty, this.caller(callback), callbackTarget);
+            }
+        };
+
+    var observableSyncProto = extendProto(syncProto, {
+        koSubscription: dummy,
+        childSyncs: dummy,
+        isSynchronized: false,
+        subscriptionFunction: function(val){
+            if(val !== this.childSyncs.value ){
+                console.log("ko notified with new value");
+                this.childSyncs.setValueLocal(val);
+            }
+        },
+        generateChildSync: function(childValue){
+            return out.propertyDocSync(childValue, this.document, this, this.childKey);
+        },
+        setChildSync: function(childValue){
+            this.childSyncs.dispose();
+            return this.childSyncs = this.generateChildSync(childValue);
+        },
+        insertChild: function(newValue){
+            //a child has a new value and can't handle it
+            this.replaceChildValue(newValue);
+            this.replaceChild(newValue);
+        },
+        replaceChild: function(childValue){
+            //in case a child can't handle its value, but the value is not new!
+            var sync = this.setChildSync(childValue);
+            if (this.isSynchronized) sync.synchronize();
+        },
+        replaceChildValue: function(newValue){
+            //child has a new value and can handle it
+            var observable = this.observable;
+            if ( ko.isObservable(observable) && ko.isWriteableObservable(observable)){
+                silentKVOProto.setter(observable,newValue);
+            }
+        },
+        dispose: function(){
+            this.childSyncs.dispose();
+            this.koSubscription.dispose();
+        },
+        init: function(){
+            var observable = this.observable;
+            if (!ko.isComputed(observable) && !ko.isLocal(observable)){
+                var observableValue = observable();
+                this.setChildSync(observableValue);
+                this.koSubscription = observable.subscribe( silentKVOProto.caller(this.subscriptionFunction), this);
+            }
+        },
+        synchronize: function(){
+            this.isSynchronized = true;
+            this.childSyncs.synchronize();
+        }
+    });
+
+
+
+
+    out.propertyDocSync = function(value){
+        var syncFunc;
+        switch(typeOf(value)){
+            case "observable":
+                syncFunc = out.observableDocSync;
+                break;
+            case "observableArray":
+                syncFunc = out.observableArrayDocSync;
+                break;
+            case "function":
+                syncFunc = dummyDisposable;
+                break;
+            case "object":
+                syncFunc = out.objectDocSync;
+                break;
+            case "value":
+                syncFunc = out.valueDocSync;
+                break;
+        }
+        return syncFunc.apply(this, arguments);
+    };
+
+
+    out.sync = function( value, doc){
+        var sync = extendProto( singleChildProto, {
+            document: doc.at(),
+            value: value
+        });
+        sync.init();
+        return sync;
+    };
+
 
     out.valueDocSync = function(value, doc, parentSync, childKey){
-        var sync = {
-            parentSync: parentSync,
-            childKey: childKey,//key where you can find value in parent
+
+        var sync = extendProto(valueSyncProto, {
+            shareSubscriptions: extendShareSubscriptionGroup({
+                collection:[]
+            }),
             value: value,
             document: doc,
-            shareSubscriptions: null,
-            synchronize: function(){
-                var docValue = doc.get();
-                if (docValue !== undefined){
-                    parentSync.property[childKey] = docValue;
-                }
-                else{
-                    doc.set(value);
-                }
-            },
-            dispose: function(){
-                removeDoc(doc);
-            },
-            init: function(){
-            }
-        };
-    };
-
-    out.objectDocSync = function(object, doc){
-        var sync = {
-            property: object,
-            document: doc,
-            shareSubscriptions: null,
-            childSyncs: extendSubscriptionGroup({
-                collection: {},
-                syncNew: function(){
-                    Object.keys(object).forEach(function(property, propKey){
-                        var propSync;
-                        if ( this.collection[propKey].property !== property){
-                            collection[propKey] = out.propertyDocSyn(property, doc.at(propKey));
-                        }
-                        else{
-                            console.log("property with key:"+ propKey +" is already synced");
-                        }
-                    }, this);
-                },
-                reSync: function(){
-                    //deletes old syncs
-                    //syncs new properties
-                    this.syncNew();
-                }
-            }),
-            dispose: function(){
-                childSyncs.dispose();
-                doc.
-            },
-            synchronize: function(){
-                this.childSyncs.reSync();
-            },
-            init: function(){
-            }
-        };
-    };
-
-    out.observableDocSync = function(observable, doc ){
-
-        var sync = {
-            value: observable,
-            document: doc,
-            koSubscription: null,
-            shareSubscriptions: null,
-            subscriptionFunction: function(){
-                this.synchronize();
-            },
-            syncOfObservableValue: null,
-            synchronize: function(){
-                var observableValue = observable();
-                if (this.syncOfObservableValue) this.syncOfObservableValue.dispose();
-                this.syncOfObservableValue = out.propertyDocSync(observableValue);
-            },
-            init: function(){
-                this.koSubscription = observable.subscribe(this.subscriptionFunction);
-            }
-        };
+            parent: parentSync,
+            childKey: childKey
+        });
 
         sync.init();
 
         return sync;
     };
 
-    out.observableArrayDocSync = function(observableArray, doc){
+    out.objectDocSync = function(value, doc, parentSync, childKey){
+        //assumes no knowledge of ko and his observables
+        var sync = extendProto( objectSyncProto, {
+            value: value,
+            document: doc,
+            parent: parentSync,
+            childKey: childKey,
+            shareSubscriptions: extendShareSubscriptionGroup({
+                collection:[]
+            }),
+            childSyncs: extendProto(objectChildSyncs,{
+                collection: {}
+            })
+        });
 
+        sync.childSyncs.sync = sync;
+
+        sync.init();
+
+        return sync;
     };
 
-})(window, ko);
+    out.observableDocSync = function(observable, doc, parentSync, childKey ){
 
+        var sync = extendProto(observableSyncProto, {
+            observable: observable,
+            document: doc,
+            parent: parentSync,
+            childKey: childKey
+        });
+
+        sync.init();
+
+        return sync;
+    };
+
+    out.observableArrayDocSync = out.observableDocSync;
+
+})(window, ko, undefined);
