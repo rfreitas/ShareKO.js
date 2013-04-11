@@ -297,20 +297,28 @@
             this.replaceChildValue(newValue, childKey);
             this.replaceChild(newValue, childKey);
         },
+        docPathComputed: function(){
+            var parentDocPath = this.parent().docPath();
+            var childKey = this.childKey();
+            var path;
+            if (!childKey) path = parentDocPath.slice(0);
+            else path = parentDocPath.concat([childKey]);
+            return path;
+        },
         init: function(value, doc, parentSync, childKey, newValueTransform){
             this.value = value;
             this.document = doc;
-            this.parent = parentSync;
-            this.childKey = childKey;
+            this.parent = ko.observable( parentSync );
+            this.childKey = ko.observable( childKey );//the sync's key as a child
+            this.docPath = ko.computed(this.docPathComputed, this);
+            this.docPath.subscribe(function(docPath){
+                this.document.path = docPath;
+            }, this);
             if (newValueTransform) this.newValueTransform = newValueTransform;
-        },
-        setChildKey: function(newKey){
-            newKey = newKey.toString();
-            var docPath = this.document.path;
-            var tailPathIndex = docPath.length-1;
-            docPath[ docPath.length-1 ] = newKey;
         }
     };
+
+
 
 
     var singleChildProto = extendProto( syncProto, {
@@ -326,13 +334,28 @@
             if (this.isSynchronized) childSyncs.synchronize();
         },
         generateChildSync: function(childValue){
-            return out.propertyDocSync(childValue, this.document, this, this.childKey, this.newValueTransform);
+            return out.propertyDocSync(childValue, this.document, this, this.childKey(), this.newValueTransform);
         },
         synchronize: function(){
             this.isSynchronized = true;
             this.childSyncs.synchronize();
         }
     });
+
+    var rootSyncProto = extendProto( singleChildProto, {
+        init: function(value, doc, newValueTransform){
+            this.value = value;
+            this.document = doc;
+            this.docPath = ko.observable( doc.path );
+            if (newValueTransform) this.newValueTransform = newValueTransform;
+            this.replaceChild(this.value);
+        },
+        generateChildSync: function(childValue){
+            return out.propertyDocSync(childValue, this.document, this, undefined, this.newValueTransform);
+        }
+    });
+
+
 
     var valueSyncProto = extendProto(syncProto, {
         isValid: function(val){
@@ -369,13 +392,14 @@
             subscribe('remoteop', docChangeHandler, this);
         },
         setValueLocal: function(value){
-            var parent = this.parent;
+            var parent = this.parent();
             var doc = this.document;
 
             if (!this.isValid(value)){
                 this.dispose();
+                var childKey = this.childKey();
                 if (this.isSynchronized) doc.set(undefined);
-                parent.replaceChild( value, this.childKey);
+                parent.replaceChild( value, childKey);
             }
             else{
                 if (this.isSynchronized && value !== doc.get() ){ doc.set(value); }
@@ -389,8 +413,8 @@
             });
         },
         setValueRemote: function(value){
-            var parent = this.parent;
-            var childKey = this.childKey;
+            var parent = this.parent();
+            var childKey = this.childKey();
             if (this.isValid(value)){
                 this.value = value;
                 parent.replaceChildValue( value, childKey );
@@ -421,14 +445,14 @@
             return out.propertyDocSync(childValue, this.document.at(childKey), this, childKey, this.newValueTransform);
         },
         setValueLocal: function(value){
-            var parent = this.parent;
-            var childKey = this.childKey;
+            var parent = this.parent();
+            var childKey = this.childKey();
             if (this.isSynchronized) this.document.set();
             parent.replaceChild(value, childKey);
         },
         setValueRemote: function(value){
-            var parent = this.parent;
-            var childKey = this.childKey;
+            var parent = this.parent();
+            var childKey = this.childKey();
             parent.insertChild( value, childKey );
         },
         dispose: function(){
@@ -584,12 +608,12 @@
         replaceChildValue: function(newValue, index){
             console.log("hey there is a new value dick wad!");
             silentKVOProto.silentCall(function(){
-                this.parent.observable.setAt(index, newValue);
+                this.parent().observable.setAt(index, newValue);
             }, this);
         },
         insertChildValueRemote: function(newValue, index){
             silentKVOProto.silentCall(function(){
-                insertInArray(this.parent.observable, index, newValue);
+                insertInArray(this.parent().observable, index, newValue);
             }, this);
         }
     });
@@ -600,9 +624,8 @@
             insertInArray( this.collection, index,  newChildSync);
             var valuesAfter = this.collection.slice(index+1);
             valuesAfter.forEach(function(childSync){
-                var childSyncPath = childSync.document.path;
-                var last = parseInt( _.last(childSyncPath) );
-                childSync.setChildKey(last + 1);
+                var index = parseInt( childSync.childKey() );
+                childSync.childKey( index + 1  );
             }, this);
             return newChildSync;
         }
@@ -625,6 +648,9 @@
                 silentKVOProto.setter(observable,newValue);
             }
         },
+        generateChildSync: function(childValue){
+            return out.propertyDocSync(childValue, this.document, this, null, this.newValueTransform);
+        },
         dispose: function(){
             this.childSyncs.dispose();
             this.koSubscription.dispose();
@@ -634,6 +660,9 @@
         },
         init: function(observable){
             Object.getPrototypeOf(observableSyncProto).init.apply(this,arguments);
+            this.childKey.subscribe(function(childKey){
+                this.childSyncs.childKey(childKey);
+            }, this);
             this.observable = observable;
             if (!ko.isComputed(observable) && !ko.isLocal(observable)){
                 var observableValue = observable();
@@ -665,7 +694,7 @@
             }
         },
         generateChildSync: function(childValue){
-            return generate.call( arrayOberservedSyncProto, childValue, this.document, this, this.childKey, this.newValueTransform);
+            return generate.call( arrayOberservedSyncProto, childValue, this.document, this, this.childKey(), this.newValueTransform);
         },
         koSubcribing: function(){
             subscribeArray(this.observable, silentKVOProto.caller(this.subscriptionFunction), this );
@@ -698,22 +727,17 @@
         return generate.apply(syncFunc, arguments);
     };
 
-    var rootSyncProto = extendProto( singleChildProto, {
-        init: function(){
-            Object.getPrototypeOf(rootSyncProto).init.apply(this,arguments);
-            this.replaceChild(this.value);
-        }
-    });
 
 
-    var generate = function( value, doc, parentSync, childKey, newValueTransform ){
+
+    var generate = function(){
         var sync = Object.create(this);
         sync.init.apply(sync, arguments);
         return sync;
     };
 
     out.sync = function( value, doc, newValueTransform){
-        return generate.call(rootSyncProto, value, doc.at(), undefined, undefined, newValueTransform);
+        return generate.call(rootSyncProto, value, doc.at(), newValueTransform);
     };
 
 })(window, ko, undefined);
