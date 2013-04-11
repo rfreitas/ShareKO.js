@@ -307,6 +307,7 @@
         setChildKey: function(newKey){
             newKey = newKey.toString();
             var docPath = this.document.path;
+            var tailPathIndex = docPath.length-1;
             docPath[ docPath.length-1 ] = newKey;
         }
     };
@@ -465,8 +466,9 @@
             this.childSyncs.setSyncs();
         },
         remoteOpHandling: function( e, operation ){
-            console.log("remote object operation");
+            console.log("remote object operation path:"+this.document.path);
             console.log(operation);
+            console.trace();
             var doc = this.document;
             var path = operation.p;
             var key = path[0];
@@ -647,7 +649,7 @@
     var observableArraySyncProto = extendProto(observableSyncProto, {
         subscriptionFunction: function(val, pre){
             console.log("Array KO Notifications, path: "+this.document.path);
-            console.log(arguments);
+            console.log([ ko.toJS(val), ko.toJS(pre) ]);
             if (!_.isEqual( val, pre)){
                 var insertValue;
                 var insertIndex;
@@ -692,8 +694,7 @@
                 syncFunc = valueSyncProto;
                 break;
         }
-        console.log("new property of type: "+type);
-        console.log(arguments);
+        console.log("new property of type: "+type+ (type==="observable"? "":"\t")+" \t key:"+arguments[3]);
         return generate.apply(syncFunc, arguments);
     };
 
