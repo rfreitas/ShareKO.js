@@ -1,0 +1,25 @@
+{
+  "name": "ShareKO.js",
+  "version": "0.0.1",
+  "description": "Glue of share.js and knockout.js (2.+)",
+  "main": "server.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "node server.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/rfreitas/ShareKO.js.git"
+  },
+  "keywords": [
+    "glue",
+    "share",
+    "share.js",
+    "knockout",
+    "ko"
+  ],
+  "author": "Ricardo Freitas",
+  "license": "BSD",
+  "readmeFilename": "README.md",
+  "gitHead": "345b77f10053143c3ab06bd61db73c3484c2d824"
+}
