@@ -679,19 +679,12 @@
         subscriptionFunction: function(val, pre){
             console.log("Array KO Notifications, path: "+this.document.path);
             console.log([ ko.toJS(val), ko.toJS(pre) ]);
-            if (!_.isEqual( val, pre)){
-                var insertValue;
-                var insertIndex;
-                if (_.first(val) !== _.first(pre)){
-                    insertIndex = 0;
-                    insertValue = _.first(val);
+            var modifications = ko.utils.compareArrays(pre, val);
+            modifications.forEach(function(mod){
+                if (mod.status === "added"){
+                    this.childSyncs.localInsertChild( mod.value, mod.index );
                 }
-                else if(_.last(val) !== _.last(pre)){
-                    insertIndex = val.length -1;
-                    insertValue = _.last(val);
-                }
-                this.childSyncs.localInsertChild( insertValue, insertIndex );
-            }
+            }, this);
         },
         generateChildSync: function(childValue){
             return generate.call( arrayOberservedSyncProto, childValue, this.document, this, this.childKey(), this.newValueTransform);
