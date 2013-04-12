@@ -1,9 +1,0 @@
-[submodule "sharejs"]
-	path = sharejs
-	url = https://github.com/josephg/ShareJS.git
-[submodule "node-browserchannel"]
-	path = node-browserchannel
-	url = https://github.com/josephg/node-browserchannel.git
-[submodule "underscore"]
-	path = underscore
-	url = https://github.com/documentcloud/underscore.git
