@@ -11,6 +11,36 @@
     var out =
         window.sko = {};
 
+    out.factory = {
+        proto: {},
+        computed: {},
+        setComputedProperties: function(object){
+            var computedProperties = this.computed;
+            Object.keys(computedProperties).forEach(function(key){
+                var computedProp = computedProperties[key];
+                object[key] = ko.computed( computedProp, object );
+            });
+        },
+        setObservables: function(out){},
+        setSubscriptions: function(out){},
+        setInitialValuesFromPlain: function(out, plain){},
+        construct: function(){
+            var out = Object.create(this.proto);
+            this.setObservables(out);
+            this.setComputedProperties(out);
+            this.setSubscriptions(out);
+            return out;
+        },
+        constructFromPlain: function(plain){
+            if (this.proto.isPrototypeOf(plain)) return plain;//already constructed
+
+            var out = this.construct();
+            if (plain) this.setInitialValuesFromPlain(out, plain);
+
+            return out;
+        }
+    };
+
     var silentKVOProto =
         out.silentKVOProto = {
             _firedBySelf: false,
