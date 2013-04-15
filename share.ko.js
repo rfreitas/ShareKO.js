@@ -79,7 +79,8 @@
         return sub;
     };
 
-    var arrayLastItem = function(array){
+    var arrayLastItem =
+    out.arrayLastItem = function(array){
         return array[ array.length - 1 ];
     };
 
