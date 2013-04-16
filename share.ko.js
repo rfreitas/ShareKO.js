@@ -159,10 +159,29 @@
             var operationSubPath = childRelativePath(operationPath, subDocPath);
             if (operationSubPath !== false){
                 var subOperation = extendProto(operation, {p: operationSubPath});
-                callback.call(this, subOperation, subdoc );
+                callback.call(this, event, subOperation, subdoc );
             }
-        });
+        }, this);
     };
+
+    var subscribeToDoc = function(doc,event, callback,callbackTarget){
+        if (callbackTarget) callback = callback.bind(callbackTarget);
+        doc.on(event, callback);
+        return {
+            dispose: function(){
+                var events = doc._events[event];
+                deleteFromArray(events, callback);
+            }
+        };
+    };
+
+    var subscribeToSelfAndChildren =
+        out.subscribeToSelfAndChildren = function(subdoc, event, callback, callbackTarget){
+            var wrapper = callSubOperationsOnly.bind(callbackTarget, subdoc, event, callback);
+            return subscribeToDoc(subdoc.doc,event,wrapper,callbackTarget);
+        };
+
+
 
     var unthisify = function(func){
         return function(target){
@@ -185,24 +204,12 @@
         if (index !== -1) deleteIndexFromArray(array, index);
     };
 
-    var subscribeToSelfAndChildren =
-    out.subscribeToSelfAndChildren = function(subdoc, event, callback, callbackTarget){
-        var wrapper = callSubOperationsOnly.bind(callbackTarget, subdoc, event, callback);
-        var doc = subdoc.doc;
-        doc.on(event, wrapper);
-        return {
-            dispose: function(){
-                var events = doc._events[event];
-                deleteFromArray(events, wrapper);
-            }
-        };
-    };
+
 
 
     var shareSubscriptionsGroupProto = extendProto(subscriptionsGroup,{
         collection:[],
         subscribe: function(subdoc, event, callback, callbackTarget){
-            callback = callback.bind(callbackTarget, event);
             return this.collection.push( subscribeToSelfAndChildren.apply(this, arguments) );
         }
     });
@@ -228,10 +235,13 @@
 
     var insertInArray = unthisify(insertArrayProto);
 
-    ko.observableArray.fn.deleteAt = function(index){
-        return this.splice( index, 1 );
+    var constructObservableArrayOperation = function(operation){
+        return function(){
+            this.valueWillMutate();
+            operation.apply(this(),arguments);
+            this.valueHasMutated();
+        };
     };
-
 
     //ref: http://stackoverflow.com/questions/5306680/move-an-array-element-from-one-array-position-to-another
     //ref: http://jsperf.com/array-prototype-move
@@ -262,8 +272,12 @@
         }
     };
 
-    var funcScarrottArrayMove = unthisify(scarrottArrayMove);
+    var arrayMove =
+    out.arrayMove = unthisify(scarrottArrayMove);
 
+    var observableArrayMoveProto = constructObservableArrayOperation(scarrottArrayMove);
+    var observableArrayMove =
+    out.observableArrayMove = unthisify( observableArrayMoveProto );
 
     var subscribeArray =
     out.subscribeWithHistoryToArray = function( observable, callback, callbackTarget ){
@@ -332,8 +346,10 @@
             var parentDocPath = this.parent().docPath();
             var childKey = this.childKey();
             var path;
-            if (!childKey) path = parentDocPath.slice(0);
-            else path = parentDocPath.concat([childKey]);
+            if (childKey === undefined || childKey === null)
+                path = parentDocPath.slice(0);
+            else
+                path = parentDocPath.concat([childKey]);
             return path;
         },
         init: function(value, doc, parentSync, childKey, newValueTransform){
@@ -346,6 +362,12 @@
                 this.document.path = docPath;
             }, this);
             if (newValueTransform) this.newValueTransform = newValueTransform;
+        },
+        remoteOp: function(operation){
+            console.log("operation on "+this.docPath()+" operationPath:"+operation.p);
+        },
+        childRemoteOp: function(operation,childKey,done){
+            console.log("child of key:"+childKey+" operation on "+this.docPath()+" operationPath:"+operation.p);
         }
     };
 
@@ -373,26 +395,77 @@
         }
     });
 
+
+    var traverseSyncsForRemoteOp = function traverseSyncsForRemoteOp( sync, operation, done, isDone, operationPath ){
+        operationPath = operationPath || operation.p;
+        var opLen = operationPath.length;
+        if (opLen === 0){
+            sync.remoteOp(operation);
+        }
+        else{
+            var childKey = operationPath[0];
+            if(opLen === 1) sync.childRemoteOp(operation, childKey, done);
+
+            var childSyncs = sync.childSyncs;
+            if (childSyncs && !isDone()){
+                var child;
+                if (childSyncs.hasOwnProperty("collection")){
+                    child = childSyncs.collection[childKey];
+                    operationPath = operationPath.slice(1);
+                }
+                else{
+                    child = childSyncs;
+                }
+                if (child) traverseSyncsForRemoteOp(child,operation, done, isDone, operationPath);
+            }
+        }
+    };
+
+
     var rootSyncProto = extendProto( singleChildProto, {
         init: function(value, doc, newValueTransform){
             this.value = value;
             this.document = doc;
             this.docPath = ko.observable( doc.path );
+            this.documentSubscription = subscribeToDoc(doc.doc, "remoteop", this.callingAllDocSubscribers, this);
             if (newValueTransform) this.newValueTransform = newValueTransform;
             this.replaceChild(this.value);
         },
         generateChildSync: function(childValue){
             return out.propertyDocSync(childValue, this.document, this, undefined, this.newValueTransform);
+        },
+        callingAllDocSubscribers: function(operations){
+            if (!this.isSynchronized) return;
+            operations.forEach(function(operation){
+                var _isDone = false;
+                var done = function(){
+                    _isDone = true;
+                };
+                var isDone = function(){
+                    return _isDone;
+                };
+
+                traverseSyncsForRemoteOp( this.childSyncs, Object.create(operation), done, isDone );
+            }, this);
         }
     });
 
 
+    var valueRemoteOp = function(){
+        console.log("value sync, share event");
+        var doc = this.document;
+        console.log(doc.get());
+        this.setValueRemote(doc.get());
+    };
 
     var valueSyncProto = extendProto(syncProto, {
         isValid: function(val){
             return isValue(val);
         },
+        remoteOp: valueRemoteOp,
+        childRemoteOp: valueRemoteOp,
         docChangeHandler: function(){
+            return;
             console.log("value sync, share event");
             var doc = this.document;
             console.log(doc.get());
@@ -520,7 +593,19 @@
 
             this.childSyncs.setSyncs();
         },
+        remoteOp: function(){
+            var doc = this.document;
+            this.setValueRemote(doc.get());
+        },
+        childRemoteOp: function(operation, key, done){
+            if ( "oi" in operation && !this.childSyncs.isChildSynced(key) ){
+                var newValue = operation.oi;
+                this.insertChild(newValue, key);
+                done();
+            }
+        },
         remoteOpHandling: function( e, operation ){
+            return;
             console.log("remote object operation path:"+this.document.path);
             console.log(operation);
             console.trace();
@@ -596,6 +681,7 @@
 
     var arraySyncProto = extendProto( objectSyncProto, {
         remoteOpHandling: function( e, operation ){
+            return;
             console.log("remote object operation");
             console.log(operation);
             var doc = this.document;
@@ -613,6 +699,25 @@
                 this.actualInsertChild(newValue, key);
             }
         },
+        remoteOp: function(){
+            var doc = this.document;
+            this.setValueRemote(doc.get());
+        },
+        childRemoteOp: function(operation, childKey, done){
+            if ( "li" in operation && !("ld"  in operation)/*you are only taking a look for new children*/){
+                console.log("Inserting child with key:"+childKey);
+
+                var newValue = operation.li;
+                this.actualInsertChild(newValue, childKey);
+                done();
+            }
+            else if( "lm" in operation){
+                var from = operation.lm;
+                var to = childKey;
+                this.remoteMoveChild(from,to);
+                done();
+            }
+        },
         insertChildValueRemote: function(newValue, index){
             insertInArray(this.value, index, newValue);
         },
@@ -623,9 +728,17 @@
             if (this.isSynchronized) sync.synchronize();
         },
         localInsertChild: function(newValue, index){
-            this.document.insert(index, null);
+            this.document.insert(index, newValue);
             var sync = this.childSyncs.insertChildSync(newValue, index);
             if (this.isSynchronized) sync.synchronize();
+        },
+        localMoveChild: function(from, to){
+            this.document.move(from,to);
+            this.childSyncs.moveChild(from,to);
+        },
+        remoteMoveChild: function(from,to){
+            arrayMove( this.value, from,to );
+            this.childSyncs.moveChild(from,to);
         },
         initOfChildSyncs: function(){
             this.childSyncs = extendProto(arrayChildSyncs,{
@@ -634,6 +747,7 @@
             });
         }
     });
+
 
     var arrayOberservedSyncProto = extendProto(arraySyncProto, {
         replaceChildValue: function(newValue, index){
@@ -646,8 +760,15 @@
             silentKVOProto.silentCall(function(){
                 insertInArray(this.parent().observable, index, newValue);
             }, this);
+        },
+        remoteMoveChild: function(from,to){
+            silentKVOProto.silentCall(function(){
+                observableArrayMove( this.parent().observable, from,to );
+            }, this);
+            this.childSyncs.moveChild(from,to);
         }
     });
+
 
     var arrayChildSyncs = extendProto(objectChildSyncs,{
         insertChildSync: function(childValue, index){
@@ -659,9 +780,16 @@
                 childSync.childKey( index + 1  );
             }, this);
             return newChildSync;
+        },
+        moveChild: function(from, to){
+            arrayMove(this.collection, from, to);
+            var startIndexForUpdate = from < to ? from : to;
+
+            this.collection.forEach(function(childDoc, newIndex){
+                childDoc.childKey(newIndex);
+            }, this);
         }
     });
-
 
 
 
@@ -712,8 +840,16 @@
             console.log([ ko.toJS(val), ko.toJS(pre) ]);
             var modifications = ko.utils.compareArrays(pre, val);
             modifications.forEach(function(mod){
-                if (mod.status === "added"){
+                if ( mod.hasOwnProperty("moved")){
+                    if (mod.status === "deleted"){
+                        this.childSyncs.localMoveChild(mod.index, mod.moved);
+                    }
+                }
+                else if (mod.status === "added"){
                     this.childSyncs.localInsertChild( mod.value, mod.index );
+                }
+                else if (mod.status === "deleted"){
+
                 }
             }, this);
         },
