@@ -368,6 +368,9 @@
         },
         childRemoteOp: function(operation,childKey,done){
             console.log("child of key:"+childKey+" operation on "+this.docPath()+" operationPath:"+operation.p);
+        },
+        dispose: function(){
+            this.childSyncs.dispose();
         }
     };
 
@@ -396,29 +399,38 @@
     });
 
 
+    var isProxySyncNode = function(syncNode){
+        return syncNode.docPath().length === syncNode.childSyncs.docPath().length
+    };
+
+
     var traverseSyncsForRemoteOp = function traverseSyncsForRemoteOp( sync, operation, done, isDone, operationPath ){
         operationPath = operationPath || operation.p;
         var opLen = operationPath.length;
+        var child;
+        if ( sync.isProxy ){
+            child = sync.childSyncs;
+        }
+
         if (opLen === 0){
-            sync.remoteOp(operation);
+            if ( sync.isProxy ){
+                sync.remoteOp(operation, done);
+            }
+            else{
+                sync.remoteOp(operation);
+            }
         }
         else{
             var childKey = operationPath[0];
             if(opLen === 1) sync.childRemoteOp(operation, childKey, done);
 
             var childSyncs = sync.childSyncs;
-            if (childSyncs && !isDone()){
-                var child;
-                if (childSyncs.hasOwnProperty("collection")){
-                    child = childSyncs.collection[childKey];
-                    operationPath = operationPath.slice(1);
-                }
-                else{
-                    child = childSyncs;
-                }
-                if (child) traverseSyncsForRemoteOp(child,operation, done, isDone, operationPath);
+            if (childSyncs && childSyncs.hasOwnProperty("collection")){
+                child = childSyncs.collection[childKey];
+                operationPath = operationPath.slice(1);
             }
         }
+        if (child && !isDone()) traverseSyncsForRemoteOp(child,operation, done, isDone, operationPath);
     };
 
 
@@ -464,13 +476,6 @@
         },
         remoteOp: valueRemoteOp,
         childRemoteOp: valueRemoteOp,
-        docChangeHandler: function(){
-            return;
-            console.log("value sync, share event");
-            var doc = this.document;
-            console.log(doc.get());
-            this.setValueRemote(doc.get());
-        },
         initialSync: function(){
             var doc = this.document;
             var docValue = doc.get();
@@ -484,16 +489,6 @@
         synchronize: function(){
             this.isSynchronized = true;
             this.initialSync();
-            this.subscribeToDocument();
-        },
-        subscribeToDocument: function(){
-            var doc = this.document;
-            var subs = this.shareSubscriptions;
-            subs.dispose();
-
-            var docChangeHandler = this.docChangeHandler.bind(this);
-            var subscribe = subs.subscribe.bind(subs, doc);
-            subscribe('remoteop', docChangeHandler, this);
         },
         setValueLocal: function(value){
             var parent = this.parent();
@@ -510,12 +505,6 @@
                 this.value = value;
             }
         },
-        init: function(){
-            Object.getPrototypeOf(valueSyncProto).init.apply(this,arguments);
-            this.shareSubscriptions = extendShareSubscriptionGroup({
-                collection:[]
-            });
-        },
         setValueRemote: function(value){
             var parent = this.parent();
             var childKey = this.childKey();
@@ -526,9 +515,6 @@
             else{
                 parent.insertChild( value, childKey );
             }
-        },
-        dispose: function(){
-            this.shareSubscriptions.dispose();
         }
     });
 
@@ -559,10 +545,6 @@
             var childKey = this.childKey();
             parent.insertChild( value, childKey );
         },
-        dispose: function(){
-            this.childSyncs.dispose();
-            this.shareSubscriptions.dispose();
-        },
         initialSync: function(){
             var doc = this.document;
             var docValue = doc.get();
@@ -585,10 +567,6 @@
         init: function(){
             Object.getPrototypeOf(objectSyncProto).init.apply(this,arguments);
 
-            this.shareSubscriptions = extendShareSubscriptionGroup({
-                collection:[]
-            });
-
             this.initOfChildSyncs();
 
             this.childSyncs.setSyncs();
@@ -604,33 +582,8 @@
                 done();
             }
         },
-        remoteOpHandling: function( e, operation ){
-            return;
-            console.log("remote object operation path:"+this.document.path);
-            console.log(operation);
-            console.trace();
-            var doc = this.document;
-            var path = operation.p;
-            var key = path[0];
-            if (path.length === 0){
-                this.setValueRemote(doc.get());
-            }
-            else if ( !this.childSyncs.isChildSynced(key)/*you are only taking a look for new children*/){
-                console.log("Inserting child");
-                console.log(operation.p);
-                console.assert(path.length === 1,"path.length !== 1, it's:"+path.length);
-                if ( "oi" in operation ){
-                    var newValue = doc.at(key).get();
-                    this.insertChild(newValue, key);
-                }
-            }
-        },
         synchronize: function(){
-            var doc = this.document;
             this.isSynchronized = true;
-
-            this.shareSubscriptions.subscribe(doc, "remoteop", this.remoteOpHandling, this);
-
             this.initialSync();
         }
     });
@@ -680,23 +633,17 @@
      */
 
     var arraySyncProto = extendProto( objectSyncProto, {
-        remoteOpHandling: function( e, operation ){
-            return;
-            console.log("remote object operation");
-            console.log(operation);
+        initialSync: function(){
             var doc = this.document;
-            var path = operation.p;
-            var key = path[0];
-            if (path.length === 0){
-                this.setValueRemote(doc.get());
-            }
-            else if ( "li" in operation && !("ld"  in operation)/*you are only taking a look for new children*/){
-                console.log("Inserting child");
-                console.log(operation.p);
-                console.assert(path.length === 1,"path.length !== 1, it's:"+path.length);
+            var docValue = doc.get();
+            var childSyncs = this.childSyncs;
 
-                var newValue = operation.li;
-                this.actualInsertChild(newValue, key);
+            if ( _.isArray(docValue)  || docValue === undefined || docValue === null){
+                if (!docValue) doc.set([]);
+                childSyncs.syncAll();
+            }
+            else {
+                this.setValueRemote(docValue);
             }
         },
         remoteOp: function(){
@@ -794,6 +741,7 @@
 
 
     var observableSyncProto = extendProto(singleChildProto, {
+        isProxy: true,
         koSubscription: dummy,
         subscriptionFunction: function(val){
             console.log("KO Notifications, path: "+this.document.path);

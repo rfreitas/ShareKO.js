@@ -6,12 +6,16 @@
  console: true,
  beforeEach: true,
  it: true,
- sko:true
+ sko:true,
+ ko:true
  */
 
 
 var doc;
 var doc1;
+
+var arrayWithObject = ko.observableArray( [{b:ko.observable(1)},2,3] );
+var sync;
 
 describe("sync", function() {
 
@@ -22,6 +26,8 @@ describe("sync", function() {
                 console.log('test');
                 console.log(arguments);
                 doc = document;
+                sync = sko.sync(arrayWithObject, doc);
+                sync.synchronize();
                 //document.at().set();
                 //document.set();
             });
