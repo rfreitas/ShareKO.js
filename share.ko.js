@@ -695,17 +695,17 @@
     var arrayOberservedSyncProto = extendProto(arraySyncProto, {
         replaceChildValue: function(newValue, index){
             console.log("hey there is a new value dick wad!");
-            silentKVOProto.silentCall(function(){
+            this.parent().silentKVO.silentCall(function(){
                 this.parent().observable.setAt(index, newValue);
             }, this);
         },
         insertChildValueRemote: function(newValue, index){
-            silentKVOProto.silentCall(function(){
+            this.parent().silentKVO.silentCall(function(){
                 insertInArray(this.parent().observable, index, newValue);
             }, this);
         },
         remoteMoveChild: function(from,to){
-            silentKVOProto.silentCall(function(){
+            this.parent().silentKVO.silentCall(function(){
                 observableArrayMove( this.parent().observable, from,to );
             }, this);
             this.childSyncs.moveChild(from,to);
@@ -748,7 +748,7 @@
             //child has a new value and can handle it
             var observable = this.observable;
             if ( ko.isObservable(observable) && ko.isWriteableObservable(observable)){
-                silentKVOProto.setter(observable,newValue);
+                this.silentKVO.setter(observable,newValue);
             }
         },
         generateChildSync: function(childValue){
@@ -759,10 +759,11 @@
             this.koSubscription.dispose();
         },
         koSubcribing: function(){
-            this.koSubscription = this.observable.subscribe( silentKVOProto.caller(this.subscriptionFunction), this);
+            this.koSubscription = this.observable.subscribe( this.silentKVO.caller(this.subscriptionFunction), this);
         },
         init: function(observable){
             Object.getPrototypeOf(observableSyncProto).init.apply(this,arguments);
+            this.silentKVO = Object.create(silentKVOProto);
             this.childKey.subscribe(function(childKey){
                 this.childSyncs.childKey(childKey);
             }, this);
@@ -782,7 +783,7 @@
         subscriptionFunction: function(val, pre){
             console.log("Array KO Notifications, path: "+this.document.path);
             var modifications = ko.utils.compareArrays(pre, val);
-            console.log(_.filter(modifications, function(mod){ return mod.status !== "retained"}) );
+            console.log( ko.toJS( _.filter(modifications, function(mod){ return mod.status !== "retained"}) ) );
             modifications.forEach(function(mod){
                 if ( mod.hasOwnProperty("moved")){
                     if (mod.status === "deleted"){
@@ -801,7 +802,7 @@
             return generate.call( arrayOberservedSyncProto, childValue, this.document, this, this.childKey(), this.newValueTransform);
         },
         koSubcribing: function(){
-            subscribeArray(this.observable, silentKVOProto.caller(this.subscriptionFunction), this );
+            subscribeArray(this.observable, this.silentKVO.caller(this.subscriptionFunction), this );
         }
     });
 
