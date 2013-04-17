@@ -781,8 +781,8 @@
     var observableArraySyncProto = extendProto(observableSyncProto, {
         subscriptionFunction: function(val, pre){
             console.log("Array KO Notifications, path: "+this.document.path);
-            console.log([ ko.toJS(val), ko.toJS(pre) ]);
             var modifications = ko.utils.compareArrays(pre, val);
+            console.log(_.filter(modifications, function(mod){ return mod.status !== "retained"}) );
             modifications.forEach(function(mod){
                 if ( mod.hasOwnProperty("moved")){
                     if (mod.status === "deleted"){
