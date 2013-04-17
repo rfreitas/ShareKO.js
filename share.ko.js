@@ -189,20 +189,15 @@
         };
     };
 
-    //ref: http://stackoverflow.com/a/9815010/689223
-    // Array Remove - By John Resig (MIT Licensed)
-    var deleteIndexFromArrayProto = function(from, to) {
-        var rest = this.slice((to || from) + 1 || this.length);
-        this.length = from < 0 ? this.length + from : from;
-        return this.push.apply(this, rest);
+
+    var deleteIndexFromArrayProto = function(index) {
+        return this.splice(index, 1);
     };
 
-    var deleteIndexFromArray = unthisify(deleteIndexFromArrayProto);
+    var deleteIndexFromArray =
+    out.arrayDeleteByIndex    = unthisify(deleteIndexFromArrayProto);
 
-    var deleteFromArray = function(array, el){
-        var index = array.indexOf(el);
-        if (index !== -1) deleteIndexFromArray(array, index);
-    };
+    var deleteFromArray = ko.utils.arrayRemoveItem;
 
 
 
@@ -233,7 +228,8 @@
         this.splice(index, 0, value);
     };
 
-    var insertInArray = unthisify(insertArrayProto);
+    var insertInArray =
+    out.arrayInsertAt = unthisify(insertArrayProto);
 
     var constructObservableArrayOperation = function(operation){
         return function(){
