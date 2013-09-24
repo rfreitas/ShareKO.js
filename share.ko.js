@@ -11,7 +11,7 @@
     var out =
         window.sko = {};
 
-    out.factory = {
+    var factory = out.factory = {
         proto: {},
         computed: {},
         setComputedProperties: function(object){
@@ -23,7 +23,16 @@
         },
         setObservables: function(out){},
         setSubscriptions: function(out){},
-        setInitialValuesFromPlain: function(out, plain){},
+        setInitialValuesFromPlain: function(out, plain){
+            _.each(plain, function(value, key){
+                if ( typeof this[key] === "function"){
+                    this[key](value);
+                }
+                else{
+                    this[key] = value;
+                }
+            }, out);
+        },
         construct: function(){
             var out = Object.create(this.proto);
             this.setObservables(out);
@@ -80,9 +89,9 @@
     };
 
     var arrayLastItem =
-    out.arrayLastItem = function(array){
-        return array[ array.length - 1 ];
-    };
+        out.arrayLastItem = function(array){
+            return array[ array.length - 1 ];
+        };
 
     ko.isLocal = function( prop ){
         return this.isObservable(prop) && prop.isLocal;
@@ -118,25 +127,25 @@
 
 
     var extendProto =
-    out.extendProto = function(prototype, properties){
-        var out = Object.create(prototype);
-        return _.extend(out, properties);
-    };
+        out.extendProto = function(prototype, properties){
+            var out = Object.create(prototype);
+            return _.extend(out, properties);
+        };
 
     var subscriptionsGroup =
-    out.subscriptionsGroupProto = {
-        collection: null,
-        dispose: function(){
-            _.forEach(this.collection, function(sub){
-                sub.dispose();
-            }, this);
-        },
-        disposeOf: function(subscriptionKey){
-            var sub = this.collection[subscriptionKey];
-            if (sub) sub.dispose();
-            delete this.collection[subscriptionKey];
-        }
-    };
+        out.subscriptionsGroupProto = {
+            collection: null,
+            dispose: function(){
+                _.forEach(this.collection, function(sub){
+                    sub.dispose();
+                }, this);
+            },
+            disposeOf: function(subscriptionKey){
+                var sub = this.collection[subscriptionKey];
+                if (sub) sub.dispose();
+                delete this.collection[subscriptionKey];
+            }
+        };
 
     var extendSubscriptionGroup = _.partial(extendProto, subscriptionsGroup);
 
@@ -195,7 +204,7 @@
     };
 
     var deleteIndexFromArray =
-    out.arrayDeleteByIndex    = unthisify(deleteIndexFromArrayProto);
+        out.arrayDeleteByIndex    = unthisify(deleteIndexFromArrayProto);
 
     var deleteFromArray = ko.utils.arrayRemoveItem;
 
@@ -229,7 +238,7 @@
     };
 
     var insertInArray =
-    out.arrayInsertAt = unthisify(insertArrayProto);
+        out.arrayInsertAt = unthisify(insertArrayProto);
 
     var constructObservableArrayOperation = function(operation){
         return function(){
@@ -269,18 +278,18 @@
     };
 
     var arrayMove =
-    out.arrayMove = unthisify(scarrottArrayMove);
+        out.arrayMove = unthisify(scarrottArrayMove);
 
     var observableArrayMoveProto = constructObservableArrayOperation(scarrottArrayMove);
     var observableArrayMove =
-    out.observableArrayMove = unthisify( observableArrayMoveProto );
+        out.observableArrayMove = unthisify( observableArrayMoveProto );
 
     var subscribeArray =
-    out.subscribeWithHistoryToArray = function( observable, callback, callbackTarget ){
-        return subscribeWithHistory(observable, callback, callbackTarget, function(arrayBeforeChange){
-            return arrayBeforeChange.slice(0);
-        });
-    };
+        out.subscribeWithHistoryToArray = function( observable, callback, callbackTarget ){
+            return subscribeWithHistory(observable, callback, callbackTarget, function(arrayBeforeChange){
+                return arrayBeforeChange.slice(0);
+            });
+        };
 
 
 
