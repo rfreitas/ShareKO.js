@@ -7,21 +7,42 @@
  */
 
 (function(window, ko, undefined){
+    "use strict";
+
+    var debugH = window.console.log;
+    var console = {};
+    console.log = function(){  };
+
 
     var out =
         window.sko = {};
 
-    var factory = out.factory = {
+    out.factory = {
         proto: {},
+        observable: {},
+        observableArrays: {},
         computed: {},
         setComputedProperties: function(object){
-            var computedProperties = this.computed;
-            Object.keys(computedProperties).forEach(function(key){
-                var computedProp = computedProperties[key];
+            _.each(this.computed, function(computedProp, key){
                 object[key] = ko.computed( computedProp, object );
             });
         },
-        setObservables: function(out){},
+        setObservables: function(out){
+            _.each(this.computed, function(observable, key){
+                out[key] = ko.observable( observable, out );
+            });
+        },
+        setObservableArrays: function(out){
+            _.each(this.computed, function(observable, key){
+                out[key] = ko.observableArray( observable, out );
+            });
+        },
+        setInstanceObservables: function(out){
+            this.setObservables(out);
+            this.setObservableArrays(out);
+            this.setComputedProperties(out);
+        },
+
         setSubscriptions: function(out){},
         setInitialValuesFromPlain: function(out, plain){
             _.each(plain, function(value, key){
@@ -33,20 +54,22 @@
                 }
             }, out);
         },
-        construct: function(){
+        construct: function(plain){
             var out = Object.create(this.proto);
-            this.setObservables(out);
-            this.setComputedProperties(out);
+
+            this.setInstanceObservables(out);
+            if (plain) this.setInitialValuesFromPlain(out, plain);
             this.setSubscriptions(out);
+
+            this.init();
+
             return out;
         },
         constructFromPlain: function(plain){
-            if (this.proto.isPrototypeOf(plain)) return plain;//already constructed
+            return this.construct(plain);
+        },
+        init: function(){
 
-            var out = this.construct();
-            if (plain) this.setInitialValuesFromPlain(out, plain);
-
-            return out;
         }
     };
 
@@ -100,30 +123,28 @@
 
     var identityFunction = function(arg){return arg;};
 
-    out.subscribeWithHistory = function(property, callback, callbackTarget, previousValueHandler/*in case you want to modify the previousValue in same way first*/){
-        previousValueHandler = previousValueHandler || identityFunction;
-        var previousValue;
-        var subscriptionBeforeChange = property.subscribe(function(valueBeforeChange){
-            previousValue = extendSubscription.previousValueHandler(valueBeforeChange);
-        }, callbackTarget, "beforeChange");
+    var subscribeWithHistory =
+        out.subscribeWithHistory = function(property, callback, callbackTarget, previousValueHandler/*in case you want to modify the previousValue in same way first*/){
 
-        /*why not use subscriptionOnce? because it does too many object deletions (with the dispose)*/
-        var subscription = property.subscribe(function(newValue){
-            return callback.call(this, newValue, previousValue);
-        }, callbackTarget);
+            previousValueHandler = previousValueHandler || identityFunction;
+            var previousValue;
+            var subscriptionBeforeChange = property.subscribe(function(valueBeforeChange){
+                previousValue = extendSubscription.previousValueHandler(valueBeforeChange);
+            }, callbackTarget, "beforeChange");
 
-        var extendSubscription = Object.create(subscription);
-        extendSubscription.dispose = function(){
-            subscriptionBeforeChange.dispose();
-            return subscription.dispose();
+            /*why not use subscriptionOnce? because it does too many object deletions (with the dispose)*/
+            var subscription = property.subscribe(function(newValue){
+                return callback.call(this, newValue, previousValue);
+            }, callbackTarget);
+
+            var extendSubscription = Object.create(subscription);
+            extendSubscription.dispose = function(){
+                subscriptionBeforeChange.dispose();
+                return subscription.dispose();
+            };
+            extendSubscription.previousValueHandler = previousValueHandler;
+            return extendSubscription;
         };
-        extendSubscription.previousValueHandler = previousValueHandler;
-        return extendSubscription;
-    };
-
-    var subscribeWithHistory = function(){
-        return out.subscribeWithHistory.apply(this,arguments);
-    };
 
 
     var extendProto =
@@ -660,8 +681,11 @@
                 console.log("Inserting child with key:"+childKey);
 
                 var newValue = operation.li;
-                this.actualInsertChild(newValue, childKey);
+                this.remoteInsertChild(newValue, childKey);
                 done();
+            }
+            else if ("li" in operation){//replacing
+                //TODO
             }
             else if( "lm" in operation){
                 var from = operation.lm;
@@ -669,16 +693,13 @@
                 this.remoteMoveChild(from,to);
                 done();
             }
+            else if ("ld" in operation){
+                this.remoteRemoveChild(childKey);
+                done();
+            }
         },
-        insertChildValueRemote: function(newValue, index){
-            insertInArray(this.value, index, newValue);
-        },
-        actualInsertChild: function(newValue, index){
-            newValue = this.callNewValueTransform(newValue, index);
-            this.insertChildValueRemote(newValue, index);
-            var sync = this.childSyncs.insertChildSync(newValue, index);
-            if (this.isSynchronized) sync.synchronize();
-        },
+
+
         localInsertChild: function(newValue, index){
             this.document.insert(index, newValue);
             var sync = this.childSyncs.insertChildSync(newValue, index);
@@ -688,10 +709,33 @@
             this.document.move(from,to);
             this.childSyncs.moveChild(from,to);
         },
+        localRemoveChild: function(index){
+            window.console.log("Removing array element with index:"+index);
+            window.console.log(this.document.get());
+            window.console.log(this.value);
+            this.document.at(index).remove();
+            this.childSyncs.deleteChild(index);
+        },
+
+
+        remoteInsertChild: function(newValue, index){
+            newValue = this.callNewValueTransform(newValue, index);
+            this.remoteInsertChildValue(newValue, index);
+            var sync = this.childSyncs.insertChildSync(newValue, index);
+            if (this.isSynchronized) sync.synchronize();
+        },
+        remoteInsertChildValue: function(newValue, index){
+            insertInArray(this.value, index, newValue);
+        },
         remoteMoveChild: function(from,to){
             arrayMove( this.value, from,to );
             this.childSyncs.moveChild(from,to);
         },
+        remoteRemoveChild: function(index){
+            deleteIndexFromArray( this.value, index);
+            this.childSyncs.deleteChild(index);
+        },
+
         initOfChildSyncs: function(){
             this.childSyncs = extendProto(arrayChildSyncs,{
                 collection: [],
@@ -708,7 +752,7 @@
                 this.parent().observable.setAt(index, newValue);
             }, this);
         },
-        insertChildValueRemote: function(newValue, index){
+        remoteInsertChildValue: function(newValue, index){
             this.parent().silentKVO.silentCall(function(){
                 insertInArray(this.parent().observable, index, newValue);
             }, this);
@@ -740,6 +784,9 @@
             this.collection.forEach(function(childDoc, newIndex){
                 childDoc.childKey(newIndex);
             }, this);
+        },
+        deleteChild: function(index){
+            this.disposeOf(index);
         }
     });
 
@@ -803,7 +850,7 @@
                     this.childSyncs.localInsertChild( mod.value, mod.index );
                 }
                 else if (mod.status === "deleted"){
-
+                    this.childSyncs.localRemoveChild(mod.index);
                 }
             }, this);
         },
@@ -840,8 +887,6 @@
         console.log("new property of type: "+type+ (type==="observable"? "":"\t")+" \t key:"+arguments[3]);
         return generate.apply(syncFunc, arguments);
     };
-
-
 
 
     var generate = function(){
